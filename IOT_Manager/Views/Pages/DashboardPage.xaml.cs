@@ -15,7 +15,7 @@ namespace IOT_Manager.Views.Pages
         public DashboardPage(DashboardViewModel viewModel)
         {
             ViewModel = viewModel;
-            DataContext = viewModel;
+            DataContext = this;
             InitializeComponent();
         }
     }

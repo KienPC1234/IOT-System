@@ -1,7 +1,11 @@
 /**
- * ESP32 Master Node - FLUSH RX FIX
- * - Fix: Thêm radio.flush_rx() để xóa dữ liệu cũ (15 bytes) trước khi nhận dữ liệu mới (8 bytes).
- * - Fix: Ép kiểu __attribute__((packed)) để đồng bộ.
+ * ESP32 Master Node - COMPLETE LOGIC
+ * - Auto Exit Register Mode: Tự thoát đăng ký khi xong.
+ * - Data Validation: Kiểm tra size gói tin.
+ * - PA Low: Ổn định sóng.
+ * - ATM Logic: Đã map đủ trường dữ liệu.
+ * - Handshake: Lệnh helloMaster.
+ * - End of Data Signal: Báo hiệu khi quét xong danh sách.
  */
 
 #include <Arduino.h>
@@ -11,11 +15,12 @@
 #include <ArduinoJson.h>
 #include <vector>
 
+const String Version = "FW_V1.2"; // Phiên bản Firmware
+
 #define PIN_CE    4
 #define PIN_CSN   5
 #define PIN_LED   21
 #define PIN_BTN   22
-#define Version "1.0B"
 
 RF24 radio(PIN_CE, PIN_CSN);
 const uint64_t REGISTER_PIPE = 0xF0F0F0F0E1LL; 
@@ -29,7 +34,7 @@ struct NodeDevice {
   bool isOnline;
 };
 
-// Ép kiểu packed để đảm bảo size là 8 bytes trên cả ESP32 và Arduino
+// Ép kiểu packed để đảm bảo size đồng nhất
 struct __attribute__((packed)) SoilData {
   float moisture;
   float temperature;
@@ -79,22 +84,18 @@ void setup() {
   pinMode(PIN_BTN, INPUT_PULLUP);
   digitalWrite(PIN_LED, LOW);
 
-  Serial.println("--- MASTER STARTING ---");
-
   if (!radio.begin()) {
     Serial.println(F("{\"error\":\"NRF24L01 init failed\"}"));
     while (1) delay(100);
   }
   
-  radio.setPALevel(RF24_PA_HIGH); 
+  radio.setPALevel(RF24_PA_LOW); 
   radio.setDataRate(RF24_250KBPS);
   radio.setRetries(5, 15);
-  radio.enableDynamicPayloads(); // Quan trọng
+  radio.enableDynamicPayloads();
   
   radio.openReadingPipe(1, REGISTER_PIPE);
   radio.startListening();
-
-  Serial.printf("Struct Check: RegisterPacket=%d bytes, SoilData=%d bytes\n", sizeof(RegisterPacket), sizeof(SoilData));
 
   loadDevices();
   Serial.println("{\"status\":\"system_ready\"}");
@@ -181,7 +182,12 @@ void processSerialCommand() {
     cmd.trim();
     if (cmd.length() == 0) return;
 
-    if (cmd == "getListDevice") {
+    // --- LỆNH HANDSHAKE ---
+    if (cmd == "helloMaster") {
+        Serial.println("Hi!"); 
+        Serial.println(Version);
+    }
+    else if (cmd == "getListDevice") {
       JsonDocument doc;
       JsonArray arr = doc.to<JsonArray>();
       for (const auto& device : devices) {
@@ -194,29 +200,28 @@ void processSerialCommand() {
     }
     else if (cmd == "getDataNow") {
       if (devices.empty()) {
-        Serial.println("{\"error\":\"no_devices\"}"); return;
+        Serial.println("{\"error\":\"no_devices\"}"); 
+        Serial.println("{\"event\":\"data_collection_finished\"}"); // Vẫn báo finish để app biết đường tắt loading
+        return;
       }
 
-      // --- FIX QUAN TRỌNG: XÓA SẠCH BUFFER TRƯỚC KHI BẮT ĐẦU ---
-      // Điều này giúp loại bỏ các gói tin REG cũ (15 bytes) còn sót lại
+      // Xóa buffer để tránh đọc phải gói tin rác/cũ
       radio.stopListening();
       radio.flush_rx(); 
-      // ---------------------------------------------------------
 
       for (auto& device : devices) {
         uint64_t nodeAddr = generateNodeAddress(device.id);
-        // Serial.printf("DEBUG: Pinging Node %s...\n", device.id);
         
         radio.stopListening();
-        // Flush lần nữa để chắc chắn sạch sẽ cho node này
         radio.flush_rx();
         radio.openWritingPipe(nodeAddr);
         
         bool success = false;
         char req[] = "GET";
         
-        delay(5); // Delay cực nhỏ để ổn định
+        delay(5); 
 
+        // Thử kết nối 5 lần
         for (int i = 0; i < 5; i++) {
           if (radio.write(&req, sizeof(req))) {
             radio.openReadingPipe(1, nodeAddr);
@@ -242,12 +247,11 @@ void processSerialCommand() {
                     sensors["soil_temperature"] = data.temperature;
                     success = true;
                 } else {
-                    // Serial.printf("DEBUG: Size Mismatch! Exp: %d, Got: %d\n", sizeof(SoilData), payloadSize);
-                    char trash[32]; radio.read(&trash, payloadSize); // Đọc bỏ rác
+                    char trash[32]; radio.read(&trash, payloadSize);
                 }
               } else {
-                 // ATM Logic
-                 if (payloadSize == sizeof(AtmData)) {
+                // --- LOGIC ATM ĐẦY ĐỦ ---
+                if (payloadSize == sizeof(AtmData)) {
                     AtmData data;
                     radio.read(&data, sizeof(data));
                     sensors["air_temperature"] = data.air_temp;
@@ -257,18 +261,19 @@ void processSerialCommand() {
                     sensors["light_intensity"] = data.light;
                     sensors["barometric_pressure"] = data.pressure;
                     success = true;
-                 } else {
+                } else {
                      char trash[32]; radio.read(&trash, payloadSize);
-                 }
+                }
               }
               
               if (success) {
                   radio.stopListening();
                   radio.openWritingPipe(nodeAddr);
                   char ack[] = "OK";
-                  delay(10); // Delay để Slave kịp chuyển sang RX
+                  delay(10); 
                   radio.write(&ack, sizeof(ack));
                   
+                  // In dữ liệu của từng node ngay khi nhận được
                   doc["id"] = device.id;
                   serializeJson(doc, Serial); Serial.println();
                   break; 
@@ -282,14 +287,25 @@ void processSerialCommand() {
            Serial.print("{\"id\":\""); Serial.print(device.id); Serial.println("\",\"status\":\"offline\"}");
         }
       }
-      // Quay lại lắng nghe kênh đăng ký
+      
+      // --- THÔNG BÁO HOÀN TẤT ---
+      // Gửi sau khi vòng lặp duyệt hết danh sách thiết bị
+      Serial.println("{\"event\":\"data_collection_finished\"}");
+
       radio.openReadingPipe(1, REGISTER_PIPE);
       radio.startListening();
     }
     else if (cmd == "deleteAllNode") { clearDevices(); }
+    else if (cmd.startsWith("deleteNode ")) {
+        String idToDelete = cmd.substring(11); idToDelete.trim();
+        bool found = false;
+        for (auto it = devices.begin(); it != devices.end(); ) {
+            if (String(it->id) == idToDelete) { it = devices.erase(it); found = true; } else { ++it; }
+        }
+        if (found) { saveDevices(); Serial.print("{\"event\":\"deleted\",\"id\":\""); Serial.print(idToDelete); Serial.println("\"}"); }
+    }
     else if (cmd == "registerNewNode") enterRegisterMode();
     else if (cmd == "cancelRegister") { exitRegisterMode(); Serial.println("{\"event\":\"register_cancelled\"}"); }
-    else if (cmd == "helloMaster") {Serial.println("Hi!"); Serial.println(Version);};
   }
 }
 
@@ -307,51 +323,53 @@ void exitRegisterMode() {
 
 void handleRegistration() {
   if (radio.available()) {
-    uint8_t size = radio.getDynamicPayloadSize();
     RegisterPacket packet;
-    
-    if (size == sizeof(RegisterPacket)) {
-        radio.read(&packet, sizeof(packet));
-        // Serial.printf("DEBUG: Reg Req from %s\n", packet.id);
+    uint8_t size = radio.getDynamicPayloadSize();
 
-        if (strncmp(packet.cmd, "REG", 3) == 0) {
-          String newId = String(packet.id);
-          NodeType newType = UNKNOWN;
-          if (newId.startsWith("soil")) newType = SOIL_NODE;
-          else if (newId.startsWith("atm")) newType = ATM_NODE;
+    if (size == sizeof(RegisterPacket)) {
+      radio.read(&packet, sizeof(packet));
+      
+      if (strncmp(packet.cmd, "REG", 3) == 0) {
+        String newId = String(packet.id);
+        NodeType newType = UNKNOWN;
+        if (newId.startsWith("soil")) newType = SOIL_NODE;
+        else if (newId.startsWith("atm")) newType = ATM_NODE;
+        
+        if (newType != UNKNOWN) {
+          bool exists = false;
+          for (const auto& d : devices) { if (String(d.id) == newId) { exists = true; break; } }
           
-          if (newType != UNKNOWN) {
-            bool exists = false;
-            for (const auto& d : devices) { if (String(d.id) == newId) { exists = true; break; } }
+          if (!exists) {
+            NodeDevice newNode;
+            strncpy(newNode.id, packet.id, 10); newNode.id[10] = '\0';
+            newNode.type = newType; newNode.isOnline = true;
+            devices.push_back(newNode);
+            saveDevices();
             
-            if (!exists) {
-              NodeDevice newNode;
-              strncpy(newNode.id, packet.id, 10); newNode.id[10] = '\0';
-              newNode.type = newType; newNode.isOnline = true;
-              devices.push_back(newNode);
-              saveDevices();
-              
-              radio.stopListening();
-              uint64_t nodeAddr = generateNodeAddress(newNode.id);
-              radio.openWritingPipe(nodeAddr); 
-              
-              delay(50); // Chờ Slave chuyển RX
-              char ack[] = "REG_OK";
-              if (radio.write(&ack, sizeof(ack))) {
-                  Serial.print("{\"event\":\"registered\",\"id\":\""); Serial.print(newId); Serial.println("\"}");
-                  exitRegisterMode();
-                  digitalWrite(PIN_LED, HIGH); delay(500); digitalWrite(PIN_LED, LOW);
-              } else {
-                  devices.pop_back(); saveDevices();
-              }
-              
-              radio.openReadingPipe(1, REGISTER_PIPE);
-              radio.startListening();
+            radio.stopListening();
+            uint64_t nodeAddr = generateNodeAddress(newNode.id);
+            radio.openWritingPipe(nodeAddr); 
+            
+            delay(50); // Delay quan trọng
+            
+            char ack[] = "REG_OK";
+            if (radio.write(&ack, sizeof(ack))) {
+               Serial.print("{\"event\":\"registered\",\"id\":\""); Serial.print(newId); Serial.println("\"}");
+               exitRegisterMode();
+               digitalWrite(PIN_LED, HIGH); delay(500); digitalWrite(PIN_LED, LOW);
+            } else {
+               // Nếu gửi ACK thất bại, xóa node vừa lưu để thử lại
+               devices.pop_back(); saveDevices();
             }
+            
+            radio.openReadingPipe(1, REGISTER_PIPE);
+            radio.startListening();
           }
         }
+      }
     } else {
-        char trash[32]; radio.read(trash, size); // Đọc bỏ
+        // Xóa gói tin rác sai kích thước
+        char trash[32]; radio.read(&trash, size);
     }
   }
 }

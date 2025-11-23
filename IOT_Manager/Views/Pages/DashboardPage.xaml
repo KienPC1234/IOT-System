@@ -4,19 +4,105 @@
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
     xmlns:local="clr-namespace:IOT_Manager.Views.Pages"
+    xmlns:helpers="clr-namespace:IOT_Manager.Helpers"
+    xmlns:models="clr-namespace:IOT_Manager.Models"
     xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
     xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
-    xmlns:oxy="http://oxyplot.org/wpf"
     Title="DashboardPage"
-    d:DataContext="{d:DesignInstance local:DashboardPage,
-                                     IsDesignTimeCreatable=False}"
-    d:DesignHeight="600"
-    d:DesignWidth="900"
-    ui:Design.Background="{DynamicResource ApplicationBackgroundBrush}"
-    ui:Design.Foreground="{DynamicResource TextFillColorPrimaryBrush}"
-    Foreground="{DynamicResource TextFillColorPrimaryBrush}"
+    d:DataContext="{d:DesignInstance local:DashboardPage, IsDesignTimeCreatable=False}"
     mc:Ignorable="d">
 
-    <Grid>
+    <!-- KHAI BÁO CONVERTERS Ở ĐÂY -->
+    <Page.Resources>
+        <helpers:StatusToColorConverter x:Key="StatusToColorConverter" />
+        <helpers:TypeToIconConverter x:Key="TypeToIconConverter" />
+    </Page.Resources>
+
+    <Grid Margin="20">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <!-- Master Card -->
+            <RowDefinition Height="Auto"/>
+            <!-- Action Bar -->
+            <RowDefinition Height="*"/>
+            <!-- Nodes List -->
+        </Grid.RowDefinitions>
+
+        <!-- Master Hub Status Card -->
+        <ui:CardControl Grid.Row="0" Margin="0,0,0,20" Icon="Server24">
+            <ui:CardControl.Header>
+                <StackPanel>
+                    <TextBlock Text="Master Node Gateway" FontSize="16" FontWeight="Bold"/>
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock Text="{Binding ViewModel.MasterStatus}" Foreground="Gray"/>
+                        <TextBlock Text=" | FW: " Foreground="Gray"/>
+                        <TextBlock Text="{Binding ViewModel.FirmwareVersion}" Foreground="Gray"/>
+                        <TextBlock Text=" | HubID: " Foreground="Gray"/>
+                        <!-- Binding xuyên qua SettingsService để lấy HubID -->
+                        <TextBlock Text="{Binding ViewModel.Config.HubId}" Foreground="Gray" FontSize="12" VerticalAlignment="Center" Margin="5,0,0,0"/>
+                    </StackPanel>
+                </StackPanel>
+            </ui:CardControl.Header>
+            <ui:CardControl.Content>
+                <StackPanel Orientation="Horizontal">
+                    <ui:ToggleSwitch IsChecked="{Binding ViewModel.IsRegisterMode, Mode=OneWay}" 
+                                      Command="{Binding ViewModel.ToggleRegisterModeCommand}"
+                                      Content="Register Mode" />
+                </StackPanel>
+            </ui:CardControl.Content>
+        </ui:CardControl>
+
+        <!-- Action Bar -->
+        <StackPanel Grid.Row="1" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,0,0,10">
+            <ui:Button Icon="ArrowSync24" Content="Get Data Now" Command="{Binding ViewModel.GetDataNowCommand}" Appearance="Primary"/>
+        </StackPanel>
+
+        <!-- Nodes List -->
+        <ScrollViewer Grid.Row="2">
+            <ItemsControl ItemsSource="{Binding ViewModel.Nodes}">
+                <ItemsControl.ItemsPanel>
+                    <ItemsPanelTemplate>
+                        <WrapPanel Orientation="Horizontal" />
+                    </ItemsPanelTemplate>
+                </ItemsControl.ItemsPanel>
+                <ItemsControl.ItemTemplate>
+                    <DataTemplate DataType="{x:Type models:NodeDisplayModel}">
+                        <ui:Card Margin="0,0,10,10" Width="260" VerticalAlignment="Top">
+                            <Grid>
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto"/>
+                                    <RowDefinition Height="Auto"/>
+                                    <RowDefinition Height="*"/>
+                                    <RowDefinition Height="Auto"/>
+                                </Grid.RowDefinitions>
+
+                                <!-- Header: SỬ DỤNG CONVERTER Ở ĐÂY -->
+                                <DockPanel Grid.Row="0" LastChildFill="False">
+                                    <ui:SymbolIcon Symbol="{Binding Type, Converter={StaticResource TypeToIconConverter}}" 
+                                                   FontSize="20" DockPanel.Dock="Left" Margin="0,0,10,0"/>
+
+                                    <TextBlock Text="{Binding NodeId}" FontWeight="SemiBold" VerticalAlignment="Center" DockPanel.Dock="Left"/>
+
+                                    <ui:Badge Content="{Binding Status}" 
+                                              Appearance="{Binding Status, Converter={StaticResource StatusToColorConverter}}" 
+                                              DockPanel.Dock="Right"/>
+                                </DockPanel>
+
+                                <Separator Grid.Row="1" Margin="0,10"/>
+
+                                <!-- Sensors Data -->
+                                <TextBlock Grid.Row="2" Text="{Binding SensorDataDisplay}" TextWrapping="Wrap" Margin="0,0,0,10" Foreground="Gray"/>
+
+                                <!-- Actions -->
+                                <ui:Button Grid.Row="3" Icon="Delete24" Appearance="Danger" 
+                                           HorizontalAlignment="Right"
+                                           Command="{Binding DataContext.ViewModel.DeleteNodeCommand, RelativeSource={RelativeSource AncestorType=Page}}"
+                                           CommandParameter="{Binding NodeId}"/>
+                            </Grid>
+                        </ui:Card>
+                    </DataTemplate>
+                </ItemsControl.ItemTemplate>
+            </ItemsControl>
+        </ScrollViewer>
     </Grid>
 </Page>

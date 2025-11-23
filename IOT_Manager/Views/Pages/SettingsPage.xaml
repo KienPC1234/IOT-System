@@ -8,9 +8,8 @@
     xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
     xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
     Title="SettingsPage"
-    d:DataContext="{d:DesignInstance local:SettingsPage,
-                                     IsDesignTimeCreatable=False}"
-    d:DesignHeight="650"
+    d:DataContext="{d:DesignInstance local:SettingsPage, IsDesignTimeCreatable=False}"
+    d:DesignHeight="800"
     d:DesignWidth="800"
     ui:Design.Background="{DynamicResource ApplicationBackgroundBrush}"
     ui:Design.Foreground="{DynamicResource TextFillColorPrimaryBrush}"
@@ -24,6 +23,7 @@
     <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="24">
         <StackPanel>
 
+            <!-- SECTION 1: PERSONALIZATION -->
             <TextBlock
                 Text="Personalization"
                 FontSize="18"
@@ -35,43 +35,81 @@
                 <ui:CardControl.Icon>
                     <ui:SymbolIcon Symbol="Color24" FontSize="20"/>
                 </ui:CardControl.Icon>
-
                 <ui:CardControl.Header>
                     <StackPanel>
                         <TextBlock Text="Application Theme" FontWeight="Medium" FontSize="14"/>
-                        <TextBlock Text="Select your preferred display mode (Light/Dark)" 
-                                   FontSize="12" 
-                                   Foreground="{DynamicResource TextFillColorSecondaryBrush}"/>
+                        <TextBlock Text="Select your preferred display mode" FontSize="12" Foreground="{DynamicResource TextFillColorSecondaryBrush}"/>
                     </StackPanel>
                 </ui:CardControl.Header>
-
                 <ui:CardControl.Content>
                     <StackPanel Orientation="Horizontal">
-                        <RadioButton
-                            Content="Light"
-                            GroupName="themeSelect"
-                            Margin="0,0,16,0"
-                            Command="{Binding ViewModel.ChangeThemeCommand, Mode=OneWay}"
-                            CommandParameter="theme_light"
+                        <RadioButton Content="Light" GroupName="themeSelect" Margin="0,0,16,0"
+                            Command="{Binding ViewModel.ChangeThemeCommand, Mode=OneWay}" CommandParameter="theme_light"
                             IsChecked="{Binding ViewModel.CurrentTheme, Converter={StaticResource EnumToBooleanConverter}, ConverterParameter=Light, Mode=OneWay}" />
-
-                        <RadioButton
-                            Content="Dark"
-                            GroupName="themeSelect"
-                            Command="{Binding ViewModel.ChangeThemeCommand, Mode=OneWay}"
-                            CommandParameter="theme_dark"
+                        <RadioButton Content="Dark" GroupName="themeSelect"
+                            Command="{Binding ViewModel.ChangeThemeCommand, Mode=OneWay}" CommandParameter="theme_dark"
                             IsChecked="{Binding ViewModel.CurrentTheme, Converter={StaticResource EnumToBooleanConverter}, ConverterParameter=Dark, Mode=OneWay}" />
                     </StackPanel>
                 </ui:CardControl.Content>
             </ui:CardControl>
 
+            <!-- SECTION 2: IOT CONFIGURATION (Mới thêm vào) -->
+            <TextBlock Text="IoT Configuration" FontSize="18" FontWeight="SemiBold" Margin="0,0,0,12" />
 
-            <TextBlock
-                Text="About Application"
-                FontSize="18"
-                FontWeight="SemiBold"
-                Foreground="{DynamicResource TextFillColorPrimaryBrush}"
-                Margin="0,0,0,12" />
+            <!-- Hub ID -->
+            <ui:CardControl Margin="0,0,0,12" Icon="Fingerprint24">
+                <ui:CardControl.Header>
+                    <StackPanel>
+                        <TextBlock Text="Hub ID (UUID v4)" FontWeight="Medium"/>
+                        <TextBlock Text="{Binding ViewModel.Config.HubId}" FontSize="12" Foreground="{DynamicResource TextFillColorSecondaryBrush}"/>
+                    </StackPanel>
+                </ui:CardControl.Header>
+                <ui:CardControl.Content>
+                    <ui:Button Icon="ArrowSync24" Content="Random New ID" Command="{Binding ViewModel.GenerateNewHubIdCommand}" />
+                </ui:CardControl.Content>
+            </ui:CardControl>
+
+            <!-- API Endpoint -->
+            <ui:CardControl Margin="0,0,0,12" Icon="CloudArrowUp24">
+                <ui:CardControl.Header>
+                    <TextBlock Text="API Endpoint" FontWeight="Medium"/>
+                </ui:CardControl.Header>
+                <ui:CardControl.Content>
+                    <ui:TextBox Text="{Binding ViewModel.Config.ApiEndpoint, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" Width="300"/>
+                </ui:CardControl.Content>
+            </ui:CardControl>
+
+            <!-- Data Interval -->
+            <ui:CardControl Margin="0,0,0,12" Icon="Timer24">
+                <ui:CardControl.Header>
+                    <StackPanel>
+                        <TextBlock Text="Data Polling Interval (seconds)" FontWeight="Medium"/>
+                        <TextBlock Text="Time between data collection cycles" FontSize="12" Foreground="{DynamicResource TextFillColorSecondaryBrush}"/>
+                    </StackPanel>
+                </ui:CardControl.Header>
+                <ui:CardControl.Content>
+                    <ui:NumberBox Value="{Binding ViewModel.Config.DataIntervalSeconds, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" 
+                                  Minimum="5" Maximum="3600" SpinButtonPlacementMode="Inline" Width="120" />
+                </ui:CardControl.Content>
+            </ui:CardControl>
+
+            <!-- Auto Send Toggle -->
+            <ui:CardControl Margin="0,0,0,24" Icon="Send24">
+                <ui:CardControl.Header>
+                    <TextBlock Text="Auto Send Data to Server" FontWeight="Medium"/>
+                </ui:CardControl.Header>
+                <ui:CardControl.Content>
+                    <ui:ToggleSwitch IsChecked="{Binding ViewModel.Config.IsDataSendEnabled, Mode=TwoWay}" />
+                </ui:CardControl.Content>
+            </ui:CardControl>
+
+            <!-- Save Button -->
+            <ui:Button Content="Save Settings" Appearance="Primary" Icon="Save24" 
+                       Command="{Binding ViewModel.SaveSettingsCommand}" HorizontalAlignment="Right" Margin="0,0,0,24"/>
+
+
+            <!-- SECTION 3: ABOUT -->
+            <TextBlock Text="About Application" FontSize="18" FontWeight="SemiBold" Margin="0,0,0,12" />
 
             <ui:Card VerticalAlignment="Stretch" Margin="0,0,0,24">
                 <Grid>
@@ -79,24 +117,14 @@
                         <ColumnDefinition Width="Auto"/>
                         <ColumnDefinition Width="*"/>
                     </Grid.ColumnDefinitions>
-
                     <ui:SymbolIcon Symbol="Info24" FontSize="40" Margin="0,0,24,0" VerticalAlignment="Center"/>
-
                     <StackPanel Grid.Column="1" VerticalAlignment="Center">
-                        <TextBlock Text="IOT Manager System" 
-                                   FontSize="16" 
-                                   FontWeight="Bold" 
-                                   Margin="0,0,0,4"/>
-
+                        <TextBlock Text="IOT Manager System" FontSize="16" FontWeight="Bold" Margin="0,0,0,4"/>
                         <StackPanel Orientation="Horizontal">
                             <TextBlock Text="Version: " Foreground="{DynamicResource TextFillColorSecondaryBrush}"/>
                             <TextBlock Text="{Binding ViewModel.AppVersion, Mode=OneWay}" FontWeight="Medium"/>
                         </StackPanel>
-
-                        <TextBlock Text="© 2025 All rights reserved." 
-                                   FontSize="12" 
-                                   Margin="0,4,0,0"
-                                   Foreground="{DynamicResource TextFillColorTertiaryBrush}"/>
+                        <TextBlock Text="© 2025 All rights reserved." FontSize="12" Margin="0,4,0,0" Foreground="{DynamicResource TextFillColorTertiaryBrush}"/>
                     </StackPanel>
                 </Grid>
             </ui:Card>

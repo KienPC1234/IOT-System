@@ -54,6 +54,7 @@ namespace IOT_Manager
                 services.AddSingleton<SettingsViewModel>();
                 services.AddSingleton<DebugPage>();
                 services.AddSingleton<DebugViewModel>();
+                services.AddSingleton<SettingsService>();
                 services.AddSingleton<ISerialService, SerialService>();
             }).Build();
 
