@@ -1,0 +1,137 @@
+﻿<Page
+    x:Class="IOT_Manager.Views.Pages.DebugPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:local="clr-namespace:IOT_Manager.Views.Pages"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
+    xmlns:oxy="http://oxyplot.org/wpf"
+    Title="DebugPage"
+    d:DataContext="{d:DesignInstance local:DashboardPage,
+                                     IsDesignTimeCreatable=False}"
+    d:DesignHeight="600"
+    d:DesignWidth="900"
+    ui:Design.Background="{DynamicResource ApplicationBackgroundBrush}"
+    ui:Design.Foreground="{DynamicResource TextFillColorPrimaryBrush}"
+    Foreground="{DynamicResource TextFillColorPrimaryBrush}"
+    mc:Ignorable="d">
+
+    <Grid Margin="24">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+
+        <ui:Card Grid.Row="0" Margin="0,0,0,16" VerticalAlignment="Center">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="104" />
+                    <ColumnDefinition Width="16"/>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+
+                <StackPanel Grid.Column="0" VerticalAlignment="Center" Margin="0,0,8,0">
+                    <TextBlock Text="Port" FontSize="12" Foreground="{DynamicResource TextFillColorSecondaryBrush}" Margin="0,0,0,4"/>
+                    <ComboBox
+                        MinWidth="140"
+                        ItemsSource="{Binding ViewModel.AvailablePorts}"
+                        SelectedItem="{Binding ViewModel.SelectedPort}"
+                        IsEnabled="{Binding ViewModel.IsNotConnected}" 
+                        ToolTip="Select COM Port"/>
+
+                </StackPanel>
+
+                <ui:Button
+                    Grid.Column="1"
+                    VerticalAlignment="Bottom"
+                    Margin="0,0,8,0"
+                    Icon="{ui:SymbolIcon Symbol=ArrowClockwise32}"
+                    Command="{Binding ViewModel.RefreshPortsCommand}"
+                    ToolTip="Scan Ports" 
+                    Appearance="Secondary" Height="35"/>
+
+                <StackPanel Grid.Column="2" VerticalAlignment="Center" Grid.ColumnSpan="2">
+                    <TextBlock Text="Baud Rate" FontSize="12" Foreground="{DynamicResource TextFillColorSecondaryBrush}" Margin="0,0,0,4"/>
+                    <ui:TextBox
+                        Width="120"
+                        Text="{Binding ViewModel.BaudRate}"
+                        PlaceholderText="9600"
+                        IsEnabled="{Binding ViewModel.IsNotConnected}" />
+                </StackPanel>
+
+                <ui:Button
+                    Grid.Column="5"
+                    VerticalAlignment="Top"
+                    Height="36"
+                    Padding="20,0"
+                    Content="{Binding ViewModel.ConnectButtonText}"
+                    Command="{Binding ViewModel.ToggleConnectionCommand}"
+                    Appearance="Primary" 
+
+                    Icon="{ui:SymbolIcon Symbol=PlugConnected24}" HorizontalAlignment="Center" Margin="0,21,0,0"/>
+            </Grid>
+        </ui:Card>
+
+
+        <ui:Card Grid.Row="1" VerticalAlignment="Top" Padding="0" Margin="0,0,0,16">
+            <Grid>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="*"/>
+                </Grid.RowDefinitions>
+
+                <Grid Grid.Row="0" Background="{DynamicResource ControlFillColorSecondaryBrush}" Height="40">
+                    <TextBlock Text="Terminal Log" VerticalAlignment="Center" Margin="10,0" FontSize="12" FontWeight="SemiBold"/>
+                    <ui:Button HorizontalAlignment="Right" 
+                                 Margin="0,0,8,0"
+                               Command="{Binding ViewModel.ClearLogCommand}" 
+                               Appearance="Transparent"
+                               Icon="{ui:SymbolIcon Symbol=Delete24}"
+                               Height="30" Width="40"/>
+                </Grid>
+
+                <TextBox
+                    Grid.Row="1"
+                    Text="{Binding ViewModel.SerialLog, Mode=OneWay}"
+                    IsReadOnly="True"
+                    TextWrapping="Wrap"
+                    VerticalScrollBarVisibility="Auto"
+                    FontFamily="Consolas"
+                    FontSize="13"
+                    BorderThickness="0"
+                    Background="Transparent"
+                    Padding="12"
+                    AcceptsReturn="True"
+                    TextChanged="LogTextBox_TextChanged"/>
+            </Grid>
+        </ui:Card>
+
+        <Grid Grid.Row="2">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+
+            <ui:TextBox
+                Height="40"
+                PlaceholderText="Enter command..."
+                Text="{Binding ViewModel.MessageToSend, UpdateSourceTrigger=PropertyChanged}"
+                Icon="Code24" 
+                VerticalContentAlignment="Center"/>
+
+            <ui:Button
+                Grid.Column="1"
+                Margin="12,0,0,0"
+                Height="40"
+                Appearance="Primary"
+                Command="{Binding ViewModel.SendDataCommand}"
+                Content="Send"
+                Icon="{ui:SymbolIcon Symbol=Send24}" />
+        </Grid>
+    </Grid>
+</Page>

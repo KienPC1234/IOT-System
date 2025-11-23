@@ -1,0 +1,20 @@
+{
+	"folders": [
+		{
+			"path": "."
+		},
+		{
+			"name": "MainHub",
+			"path": "MainHub"
+		},
+		{
+			"name": "Soil Node",
+			"path": "Soil Node"
+		},
+		{
+			"name": "ATM Node",
+			"path": "ATM Node"
+		}
+	],
+	"settings": {}
+}
