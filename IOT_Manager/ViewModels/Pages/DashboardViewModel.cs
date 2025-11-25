@@ -15,6 +15,7 @@ using System.Windows;
 using System.Windows.Threading;
 using Wpf.Ui.Appearance;
 using Wpf.Ui.Controls;
+using NullSoftware.ToolKit; // Thêm namespace của thư viện TrayIcon
 
 namespace IOT_Manager.ViewModels.Pages
 {
@@ -43,7 +44,6 @@ namespace IOT_Manager.ViewModels.Pages
         private readonly SettingsService _settingsService;
         private readonly HttpClient _httpClient;
 
-        // Tùy chọn JSON để không bị lỗi chữ hoa/thường
         private readonly JsonSerializerOptions _jsonOptions = new JsonSerializerOptions
         {
             PropertyNameCaseInsensitive = true
@@ -54,23 +54,20 @@ namespace IOT_Manager.ViewModels.Pages
         private DispatcherTimer _uploadDebounceTimer;
 
         private bool _isScanning = false;
-
-        // Cờ quan trọng: Ngăn chặn gửi lệnh Serial khi cập nhật UI từ dữ liệu nhận được
         private bool _isInternalUpdate = false;
 
         private StringBuilder _logBuilder = new StringBuilder();
 
-        // Event RequestNotification: (Title, Message, Type)
-        // Type: "Info", "Success", "Danger", "Windows" (Dùng loại này cho native notification)
+        // Event này chỉ còn dùng cho Snackbar trong App (Success/Danger/Info)
         public event Action<string, string, string> RequestNotification;
+
+        // --- TRAY ICON SERVICE (Được Inject từ XAML) ---
+        public INotificationService NotificationService { get; set; }
 
         [ObservableProperty] private bool _isMasterConnected;
         [ObservableProperty] private string _masterStatus = "Searching...";
         [ObservableProperty] private string _firmwareVersion = "Unknown";
-
-        // Property này sẽ tự động gọi OnIsRegisterModeChanged khi thay đổi
         [ObservableProperty] private bool _isRegisterMode;
-
         [ObservableProperty] private string _appLogs = "System initialized...";
 
         public ObservableCollection<NodeDisplayModel> Nodes { get; } = new();
@@ -101,18 +98,15 @@ namespace IOT_Manager.ViewModels.Pages
 
             InitializePlots();
 
-            // Timer Poll Data
             _dataTimer = new DispatcherTimer();
             _dataTimer.Tick += async (s, e) => await GetDataRoutine();
             if (_settingsService.Config != null)
                 _dataTimer.Interval = TimeSpan.FromSeconds(_settingsService.Config.DataIntervalSeconds > 0 ? _settingsService.Config.DataIntervalSeconds : 5);
 
-            // Timer Scan Port
             _scanTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(2) };
             _scanTimer.Tick += AutoScanPorts;
             _scanTimer.Start();
 
-            // Timer Upload (Debounce)
             _uploadDebounceTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(2) };
             _uploadDebounceTimer.Tick += (s, e) =>
             {
@@ -123,11 +117,8 @@ namespace IOT_Manager.ViewModels.Pages
             AddToLog("Dashboard started. Waiting for connection...");
         }
 
-        // --- FIX LOGIC TOGGLE SWITCH (Phần bị thiếu trước đó) ---
-        // Hàm này tự động chạy khi IsRegisterMode thay đổi (do CommunityToolkit sinh ra)
         partial void OnIsRegisterModeChanged(bool value)
         {
-            // Nếu thay đổi do code (nhận từ serial - _isInternalUpdate = true) thì không gửi lệnh ngược lại
             if (_isInternalUpdate) return;
 
             if (value)
@@ -170,26 +161,20 @@ namespace IOT_Manager.ViewModels.Pages
                 using var doc = JsonDocument.Parse(data);
                 var root = doc.RootElement;
 
-                // Case 1: List of devices
                 if (root.ValueKind == JsonValueKind.Array)
                 {
                     var list = JsonSerializer.Deserialize<List<NodeInfo>>(data, _jsonOptions);
                     UpdateNodeList(list);
                 }
-                // Case 2: Data object
                 else if (root.ValueKind == JsonValueKind.Object)
                 {
-                    // Lấy Status
                     if (root.TryGetProperty("status", out var s) || root.TryGetProperty("Status", out s))
                         HandleStatus(s.GetString(), root);
 
-                    // Lấy Event
                     if (root.TryGetProperty("event", out var e) || root.TryGetProperty("Event", out e))
                         HandleEvent(e.GetString(), root);
 
-                    // Lấy Sensor Data
-                    JsonElement sensors;
-                    JsonElement nodeId;
+                    JsonElement sensors, nodeId;
                     bool hasSensors = root.TryGetProperty("sensors", out sensors) || root.TryGetProperty("Sensors", out sensors);
                     bool hasId = root.TryGetProperty("id", out nodeId) || root.TryGetProperty("Id", out nodeId);
 
@@ -212,10 +197,10 @@ namespace IOT_Manager.ViewModels.Pages
 
         private void HandleStatus(string status, JsonElement root)
         {
-            _isInternalUpdate = true; // Bắt đầu cập nhật nội bộ, chặn OnIsRegisterModeChanged gửi lệnh
+            _isInternalUpdate = true;
             if (status == "register_mode_active") IsRegisterMode = true;
             if (status == "system_ready") IsRegisterMode = false;
-            _isInternalUpdate = false; // Mở khóa
+            _isInternalUpdate = false;
         }
 
         private void HandleEvent(string evt, JsonElement root)
@@ -228,7 +213,6 @@ namespace IOT_Manager.ViewModels.Pages
                 if (root.TryGetProperty("id", out var idElem)) id = idElem.GetString();
                 ShowWindowsNotify("New Device", $"Node {id} registered successfully!");
 
-                // Tự động tắt chế độ đăng ký trên UI mà không gửi lệnh cancel
                 _isInternalUpdate = true;
                 IsRegisterMode = false;
                 _isInternalUpdate = false;
@@ -293,11 +277,8 @@ namespace IOT_Manager.ViewModels.Pages
 
             string k = key.ToLower();
 
-            // Soil
             if (k.Contains("soil_moisture")) return new SensorAttribute { Name = "Moisture", Value = rawValue, Unit = "%", Icon = SymbolRegular.Drop24 };
             if (k.Contains("soil_temperature")) return new SensorAttribute { Name = "Soil Temp", Value = rawValue, Unit = "°C", Icon = SymbolRegular.Temperature24 };
-
-            // Atmosphere
             if (k.Contains("air_temperature")) return new SensorAttribute { Name = "Air Temp", Value = rawValue, Unit = "°C", Icon = SymbolRegular.Temperature24 };
             if (k.Contains("air_humidity")) return new SensorAttribute { Name = "Humidity", Value = rawValue, Unit = "%", Icon = SymbolRegular.Drop12 };
             if (k.Contains("rain")) return new SensorAttribute { Name = "Rain", Value = rawValue, Unit = "mm", Icon = SymbolRegular.WeatherRain24 };
@@ -305,7 +286,6 @@ namespace IOT_Manager.ViewModels.Pages
             if (k.Contains("light")) return new SensorAttribute { Name = "Light", Value = rawValue, Unit = "lux", Icon = SymbolRegular.WeatherSunny24 };
             if (k.Contains("pressure")) return new SensorAttribute { Name = "Pressure", Value = rawValue, Unit = "hPa", Icon = SymbolRegular.Gauge24 };
 
-            // Default
             return new SensorAttribute { Name = key, Value = rawValue, Unit = "", Icon = SymbolRegular.QuestionCircle24 };
         }
 
@@ -316,7 +296,6 @@ namespace IOT_Manager.ViewModels.Pages
             bool soilUpdated = false;
             bool atmUpdated = false;
 
-            // Soil Average
             var soilNodes = Nodes.Where(n => n.Type.ToLower().Contains("soil") && n.RawSensors != null).ToList();
             if (soilNodes.Any())
             {
@@ -331,7 +310,6 @@ namespace IOT_Manager.ViewModels.Pages
                 if (countM > 0) { _soilMoistSeries.Points.Add(new DataPoint(_dataPointIndex, avgMoist / countM)); soilUpdated = true; }
             }
 
-            // Atm Data
             var atmNode = Nodes.FirstOrDefault(n => n.Type.ToLower().Contains("atm") && n.RawSensors != null);
             if (atmNode != null)
             {
@@ -361,18 +339,15 @@ namespace IOT_Manager.ViewModels.Pages
         {
             val = 0;
             if (dict == null) return false;
-            // Case-insensitive check
             var entry = dict.FirstOrDefault(x => x.Key.Equals(key, StringComparison.OrdinalIgnoreCase));
             if (entry.Key != null && double.TryParse(entry.Value?.ToString(), out val)) return true;
             return false;
         }
 
-        // --- SCAN & CONNECT ---
         private async void AutoScanPorts(object sender, EventArgs e)
         {
             if (_serialService.IsConnected || _isScanning || _isMasterConnected) return;
             _isScanning = true;
-
             await Task.Run(async () =>
             {
                 try
@@ -423,12 +398,7 @@ namespace IOT_Manager.ViewModels.Pages
             return false;
         }
 
-        // --- COMMANDS ---
-
-        [RelayCommand]
-        private void GetDataNow() => _serialService.SendData("getDataNow");
-
-        // Đã xóa ToggleRegisterModeCommand vì đã dùng OnIsRegisterModeChanged
+        [RelayCommand] private void GetDataNow() => _serialService.SendData("getDataNow");
 
         [RelayCommand]
         private void DeleteNode(string id)
@@ -439,8 +409,6 @@ namespace IOT_Manager.ViewModels.Pages
             _serialService.SendData($"deleteNode {id}");
             ShowWindowsNotify("System", $"Sent delete command for {id}");
         }
-
-        // --- HELPERS ---
 
         private void UpdateNodeList(List<NodeInfo> list)
         {
@@ -502,30 +470,39 @@ namespace IOT_Manager.ViewModels.Pages
         }
 
         private void ShowToast(string t, string m, string type) => RequestNotification?.Invoke(t, m, type);
-        private void ShowWindowsNotify(string t, string m) => RequestNotification?.Invoke(t, m, "Windows");
 
-        // --- INIT PLOTS (Đầy đủ code) ---
+        private void ShowWindowsNotify(string t, string m)
+        {
+            NotificationService?.Notify(t, m, NotificationType.Information);
+        }
+
+        // --- INIT PLOTS (Đầy đủ & Chi tiết) ---
         private void InitializePlots()
         {
             var isDark = ApplicationThemeManager.GetAppTheme() == ApplicationTheme.Dark;
             var textColor = isDark ? OxyColors.White : OxyColors.Black;
             var gridColor = isDark ? OxyColor.Parse("#30FFFFFF") : OxyColor.Parse("#30000000");
 
-            // Soil Plot
-            SoilPlotModel = CreateBasePlot("Soil Moisture & Temp", textColor, gridColor, false);
+            // 1. Soil Plot
+            SoilPlotModel = CreateBasePlot("Soil Data (Average)", textColor, gridColor, false);
+
             _soilTempSeries = CreateSeries("Temp (°C)", OxyColors.OrangeRed, "LeftAxis");
-            _soilMoistSeries = CreateSeries("Moist (%)", OxyColors.ForestGreen, "LeftAxis");
+            _soilMoistSeries = CreateSeries("Moisture (%)", OxyColors.ForestGreen, "LeftAxis");
+
             SoilPlotModel.Series.Add(_soilTempSeries);
             SoilPlotModel.Series.Add(_soilMoistSeries);
 
-            // Atm Plot
-            AtmPlotModel = CreateBasePlot("Weather Station Data", textColor, gridColor, true);
-            _atmTempSeries = CreateSeries("Temp", OxyColors.OrangeRed, "LeftAxis");
-            _atmHumidSeries = CreateSeries("Humid", OxyColors.DeepSkyBlue, "LeftAxis");
-            _atmRainSeries = CreateSeries("Rain", OxyColors.Blue, "LeftAxis");
-            _atmWindSeries = CreateSeries("Wind", OxyColors.Teal, "LeftAxis");
-            _atmLightSeries = CreateSeries("Light", OxyColors.Gold, "RightAxis");
-            _atmPressSeries = CreateSeries("Press", OxyColors.Purple, "RightAxis");
+            SoilPlotModel.InvalidatePlot(true);
+
+            // 2. Atm Plot
+            AtmPlotModel = CreateBasePlot("Atmospheric Data (6 Params)", textColor, gridColor, true);
+
+            _atmTempSeries = CreateSeries("Temp (°C)", OxyColors.OrangeRed, "LeftAxis");
+            _atmHumidSeries = CreateSeries("Humid (%)", OxyColors.DeepSkyBlue, "LeftAxis");
+            _atmRainSeries = CreateSeries("Rain (mm)", OxyColors.Blue, "LeftAxis");
+            _atmWindSeries = CreateSeries("Wind (m/s)", OxyColors.Teal, "LeftAxis");
+            _atmLightSeries = CreateSeries("Light (lux)", OxyColors.Gold, "RightAxis");
+            _atmPressSeries = CreateSeries("Pressure (hPa)", OxyColors.Purple, "RightAxis");
 
             AtmPlotModel.Series.Add(_atmTempSeries);
             AtmPlotModel.Series.Add(_atmHumidSeries);
@@ -534,20 +511,78 @@ namespace IOT_Manager.ViewModels.Pages
             AtmPlotModel.Series.Add(_atmLightSeries);
             AtmPlotModel.Series.Add(_atmPressSeries);
 
-            SoilPlotModel.InvalidatePlot(true);
             AtmPlotModel.InvalidatePlot(true);
+        }
+
+        private LineSeries CreateSeries(string title, OxyColor color, string axisKey)
+        {
+            return new LineSeries
+            {
+                Title = title,
+                Color = color,
+                MarkerType = MarkerType.Circle,
+                MarkerSize = 2,
+                StrokeThickness = 1.5,
+                YAxisKey = axisKey
+            };
         }
 
         private PlotModel CreateBasePlot(string title, OxyColor textColor, OxyColor gridColor, bool useDualAxis)
         {
-            var model = new PlotModel { Title = title, TextColor = textColor, PlotAreaBorderColor = OxyColors.Transparent, TitleFontSize = 14 };
-            model.Legends.Add(new Legend { LegendPosition = LegendPosition.TopRight, LegendOrientation = LegendOrientation.Horizontal, LegendBorderThickness = 0, LegendTextColor = textColor });
-            model.Axes.Add(new LinearAxis { Position = AxisPosition.Bottom, MajorGridlineStyle = LineStyle.Solid, MajorGridlineColor = gridColor, TicklineColor = textColor, TextColor = textColor });
-            model.Axes.Add(new LinearAxis { Position = AxisPosition.Left, Key = "LeftAxis", MajorGridlineStyle = LineStyle.Solid, MajorGridlineColor = gridColor, TicklineColor = textColor, TextColor = textColor });
-            if (useDualAxis) model.Axes.Add(new LinearAxis { Position = AxisPosition.Right, Key = "RightAxis", TicklineColor = textColor, TextColor = textColor });
+            var model = new PlotModel
+            {
+                Title = title,
+                TextColor = textColor,
+                PlotAreaBorderColor = OxyColors.Transparent,
+                TitleFontSize = 14
+            };
+
+            var legend = new Legend
+            {
+                LegendPosition = LegendPosition.TopRight,
+                LegendOrientation = LegendOrientation.Horizontal,
+                LegendBorderThickness = 0,
+                LegendFontSize = 10,
+                LegendTextColor = textColor
+            };
+            model.Legends.Add(legend);
+
+            model.Axes.Add(new LinearAxis
+            {
+                Position = AxisPosition.Bottom,
+                MajorGridlineStyle = LineStyle.Solid,
+                MajorGridlineColor = gridColor,
+                TicklineColor = textColor,
+                TextColor = textColor,
+                MinimumRange = 10
+            });
+
+            model.Axes.Add(new LinearAxis
+            {
+                Position = AxisPosition.Left,
+                Key = "LeftAxis",
+                MajorGridlineStyle = LineStyle.Solid,
+                MajorGridlineColor = gridColor,
+                TicklineColor = textColor,
+                TextColor = textColor,
+                MinimumRange = 10,
+                Title = "Value"
+            });
+
+            if (useDualAxis)
+            {
+                model.Axes.Add(new LinearAxis
+                {
+                    Position = AxisPosition.Right,
+                    Key = "RightAxis",
+                    TicklineColor = textColor,
+                    TextColor = textColor,
+                    MinimumRange = 100,
+                    Title = "High Value"
+                });
+            }
+
             return model;
         }
-
-        private LineSeries CreateSeries(string title, OxyColor color, string axisKey) => new LineSeries { Title = title, Color = color, MarkerType = MarkerType.None, StrokeThickness = 2, YAxisKey = axisKey };
     }
 }

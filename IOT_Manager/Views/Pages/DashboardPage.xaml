@@ -8,18 +8,33 @@
     xmlns:oxy="http://oxyplot.org/wpf"
     xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
     xmlns:helpers="clr-namespace:IOT_Manager.Helpers"
+    xmlns:icon="https://github.com/nullsoftware/TrayIcon"
     Title="DashboardPage"
     mc:Ignorable="d"
     ui:Design.Background="{DynamicResource ApplicationBackgroundBrush}"
     ui:Design.Foreground="{DynamicResource TextFillColorPrimaryBrush}"
-    Foreground="{DynamicResource TextFillColorPrimaryBrush}"
-    d:DataContext="{d:DesignInstance Type={x:Type vm:DashboardViewModel}, IsDesignTimeCreatable=False}">
+    Foreground="{DynamicResource TextFillColorPrimaryBrush}">
 
     <Page.Resources>
         <helpers:StatusToColorConverter x:Key="StatusToColorConverter" />
         <helpers:TypeToIconConverter x:Key="TypeToIconConverter" />
         <helpers:CountToVisibilityConverter x:Key="CountToVisibilityConverter" />
     </Page.Resources>
+
+    <!-- TRAY ICON CONFIGURATION -->
+    <icon:TrayIconHandlers.TrayIcons>
+        <icon:TrayIcon Title="IoT Manager Dashboard"
+                       IconSource="pack://application:,,,/Assets/wpfui-icon-256.ico"
+                       NotificationServiceMemberPath="NotificationService">
+            <icon:TrayIcon.ContextMenu>
+                <ContextMenu>
+                    <MenuItem Header="Poll Data Now" Command="{Binding GetDataNowCommand}"/>
+                    <Separator/>
+                    <MenuItem Header="Register Mode" IsCheckable="True" IsChecked="{Binding IsRegisterMode}"/>
+                </ContextMenu>
+            </icon:TrayIcon.ContextMenu>
+        </icon:TrayIcon>
+    </icon:TrayIconHandlers.TrayIcons>
 
     <Grid>
         <Grid.RowDefinitions>
@@ -121,8 +136,6 @@
 
                                         <!-- Button Delete -->
                                         <ui:CardControl.Content>
-                                            <!-- FIX BINDING PATH HERE -->
-                                            <!-- DataContext của Page là ViewModel, nên ta tìm đến DataContext của Page -->
                                             <ui:Button Appearance="Transparent" 
                                                        Command="{Binding DataContext.DeleteNodeCommand, RelativeSource={RelativeSource AncestorType=Page}}" 
                                                        CommandParameter="{Binding NodeId}" 
