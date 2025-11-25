@@ -8,7 +8,7 @@
     xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
     xmlns:oxy="http://oxyplot.org/wpf"
     Title="DebugPage"
-    d:DataContext="{d:DesignInstance local:DashboardPage,
+    d:DataContext="{d:DesignInstance local:DebugPage,
                                      IsDesignTimeCreatable=False}"
     d:DesignHeight="600"
     d:DesignWidth="900"

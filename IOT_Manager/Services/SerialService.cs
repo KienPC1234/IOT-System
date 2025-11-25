@@ -1,56 +1,78 @@
 ﻿using System;
-using System.IO.Ports;
+using System.Collections.Generic;
 using System.Diagnostics;
+using System.IO.Ports;
+using System.Threading;
+using System.Threading.Tasks;
 
 namespace IOT_Manager.Services
 {
+    public interface ISerialService
+    {
+        string[] GetAvailablePorts();
+        void Connect(string portName, int baudRate);
+        void Disconnect();
+        void SendData(string data);
+        bool IsConnected { get; }
+        event Action<string> DataReceived;
+    }
+
     public class SerialService : ISerialService
     {
         private SerialPort _serialPort;
-
-        // Event bắn dữ liệu ra ngoài khi nhận được từ COM
+        private CancellationTokenSource _readCts;
         public event Action<string> DataReceived;
-
-        public SerialService()
-        {
-            _serialPort = new SerialPort();
-            _serialPort.DataReceived += OnSerialDataReceived;
-        }
 
         public bool IsConnected => _serialPort != null && _serialPort.IsOpen;
 
-        public string[] GetAvailablePorts()
-        {
-            return SerialPort.GetPortNames();
-        }
+        public string[] GetAvailablePorts() => SerialPort.GetPortNames();
 
         public void Connect(string portName, int baudRate)
         {
-            if (_serialPort.IsOpen) _serialPort.Close();
+            Disconnect(); // Đảm bảo ngắt kết nối cũ trước
 
-            _serialPort.PortName = portName;
-            _serialPort.BaudRate = baudRate;
-            _serialPort.Parity = Parity.None;
-            _serialPort.DataBits = 8;
-            _serialPort.StopBits = StopBits.One;
-            _serialPort.Handshake = Handshake.None;
+            _serialPort = new SerialPort
+            {
+                PortName = portName,
+                BaudRate = baudRate,
+                Parity = Parity.None,
+                DataBits = 8,
+                StopBits = StopBits.One,
+                Handshake = Handshake.None,
+                DtrEnable = true,
+                RtsEnable = true,
+                ReadTimeout = 2000,
+                WriteTimeout = 500
+            };
 
             try
             {
                 _serialPort.Open();
+
+                // Bắt đầu luồng đọc dữ liệu riêng biệt để không block UI
+                _readCts = new CancellationTokenSource();
+                Task.Run(() => ReadSerialLoop(_readCts.Token));
             }
             catch (Exception ex)
             {
-                Debug.WriteLine($"Error opening port: {ex.Message}");
-                throw; // Ném lỗi để UI xử lý (hiện thông báo)
+                Debug.WriteLine($"Serial Connection Error: {ex.Message}");
+                Disconnect();
+                throw;
             }
         }
 
         public void Disconnect()
         {
-            if (_serialPort.IsOpen)
+            _readCts?.Cancel();
+
+            if (_serialPort != null)
             {
-                _serialPort.Close();
+                if (_serialPort.IsOpen)
+                {
+                    try { _serialPort.Close(); } catch { }
+                }
+                _serialPort.Dispose();
+                _serialPort = null;
             }
         }
 
@@ -58,23 +80,43 @@ namespace IOT_Manager.Services
         {
             if (IsConnected)
             {
-                _serialPort.WriteLine(data); // Hoặc Write(data) tùy thiết bị
+                try
+                {
+                    _serialPort.WriteLine(data);
+                }
+                catch (Exception ex)
+                {
+                    Debug.WriteLine($"Send Error: {ex.Message}");
+                    Disconnect(); // Tự động ngắt nếu mất kết nối vật lý
+                }
             }
         }
 
-        private void OnSerialDataReceived(object sender, SerialDataReceivedEventArgs e)
+        // Vòng lặp đọc dữ liệu liên tục (Hiệu quả hơn DataReceived event truyền thống trên một số driver)
+        private async Task ReadSerialLoop(CancellationToken token)
         {
-            try
+            while (!token.IsCancellationRequested && IsConnected)
             {
-                // Đọc dữ liệu (ReadExisting hoặc ReadLine tùy protocol)
-                string data = _serialPort.ReadLine();
+                try
+                {
+                    string data = await Task.Run(() =>
+                    {
+                        try { return _serialPort.ReadLine(); }
+                        catch { return null; }
+                    }, token);
 
-                // Bắn sự kiện ra ngoài (UI sẽ bắt cái này)
-                DataReceived?.Invoke(data);
-            }
-            catch (Exception ex)
-            {
-                Debug.WriteLine($"Read error: {ex.Message}");
+                    if (!string.IsNullOrEmpty(data))
+                    {
+                        DataReceived?.Invoke(data);
+                    }
+                }
+                catch (OperationCanceledException) { break; }
+                catch (Exception)
+                {
+                    // Lỗi đọc nghiêm trọng (ví dụ rút cáp)
+                    Disconnect();
+                    break;
+                }
             }
         }
     }

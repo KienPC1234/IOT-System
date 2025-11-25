@@ -3,106 +3,190 @@
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
-    xmlns:local="clr-namespace:IOT_Manager.Views.Pages"
-    xmlns:helpers="clr-namespace:IOT_Manager.Helpers"
-    xmlns:models="clr-namespace:IOT_Manager.Models"
     xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    xmlns:vm="clr-namespace:IOT_Manager.ViewModels.Pages"
+    xmlns:oxy="http://oxyplot.org/wpf"
     xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
+    xmlns:helpers="clr-namespace:IOT_Manager.Helpers"
     Title="DashboardPage"
-    d:DataContext="{d:DesignInstance local:DashboardPage, IsDesignTimeCreatable=False}"
-    mc:Ignorable="d">
+    mc:Ignorable="d"
+    ui:Design.Background="{DynamicResource ApplicationBackgroundBrush}"
+    ui:Design.Foreground="{DynamicResource TextFillColorPrimaryBrush}"
+    Foreground="{DynamicResource TextFillColorPrimaryBrush}"
+    d:DataContext="{d:DesignInstance Type={x:Type vm:DashboardViewModel}, IsDesignTimeCreatable=False}">
 
-    <!-- KHAI BÁO CONVERTERS Ở ĐÂY -->
     <Page.Resources>
         <helpers:StatusToColorConverter x:Key="StatusToColorConverter" />
         <helpers:TypeToIconConverter x:Key="TypeToIconConverter" />
+        <helpers:CountToVisibilityConverter x:Key="CountToVisibilityConverter" />
     </Page.Resources>
 
-    <Grid Margin="20">
+    <Grid>
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto"/>
-            <!-- Master Card -->
-            <RowDefinition Height="Auto"/>
-            <!-- Action Bar -->
+            <!-- Header -->
             <RowDefinition Height="*"/>
-            <!-- Nodes List -->
+            <!-- Main Content -->
+            <RowDefinition Height="180"/>
+            <!-- Logs -->
         </Grid.RowDefinitions>
 
-        <!-- Master Hub Status Card -->
-        <ui:CardControl Grid.Row="0" Margin="0,0,0,20" Icon="Server24">
-            <ui:CardControl.Header>
-                <StackPanel>
-                    <TextBlock Text="Master Node Gateway" FontSize="16" FontWeight="Bold"/>
-                    <StackPanel Orientation="Horizontal">
-                        <TextBlock Text="{Binding ViewModel.MasterStatus}" Foreground="Gray"/>
-                        <TextBlock Text=" | FW: " Foreground="Gray"/>
-                        <TextBlock Text="{Binding ViewModel.FirmwareVersion}" Foreground="Gray"/>
-                        <TextBlock Text=" | HubID: " Foreground="Gray"/>
-                        <!-- Binding xuyên qua SettingsService để lấy HubID -->
-                        <TextBlock Text="{Binding ViewModel.Config.HubId}" Foreground="Gray" FontSize="12" VerticalAlignment="Center" Margin="5,0,0,0"/>
-                    </StackPanel>
+        <ui:SnackbarPresenter x:Name="SnackbarPresenter" Grid.RowSpan="3" VerticalAlignment="Bottom" HorizontalAlignment="Center" Panel.ZIndex="99"/>
+
+        <!-- 1. HEADER -->
+        <Grid Grid.Row="0" Margin="24,24,24,12">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="Auto"/>
+            </Grid.ColumnDefinitions>
+
+            <StackPanel>
+                <TextBlock Text="IoT Hub Dashboard" FontSize="28" FontWeight="ExtraBold" Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
+                <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
+                    <ui:Badge Appearance="Success" Content="{Binding MasterStatus}" Margin="0,0,12,0"/>
+                    <TextBlock Text="{Binding FirmwareVersion}" VerticalAlignment="Center" FontSize="12" Foreground="{DynamicResource TextFillColorSecondaryBrush}"/>
                 </StackPanel>
-            </ui:CardControl.Header>
-            <ui:CardControl.Content>
-                <StackPanel Orientation="Horizontal">
-                    <ui:ToggleSwitch IsChecked="{Binding ViewModel.IsRegisterMode, Mode=OneWay}" 
-                                      Command="{Binding ViewModel.ToggleRegisterModeCommand}"
-                                      Content="Register Mode" />
-                </StackPanel>
-            </ui:CardControl.Content>
-        </ui:CardControl>
+            </StackPanel>
 
-        <!-- Action Bar -->
-        <StackPanel Grid.Row="1" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,0,0,10">
-            <ui:Button Icon="ArrowSync24" Content="Get Data Now" Command="{Binding ViewModel.GetDataNowCommand}" Appearance="Primary"/>
-        </StackPanel>
+            <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                <ui:ToggleSwitch IsChecked="{Binding IsRegisterMode}" Content="Register Mode" Margin="0,0,16,0"/>
+                <ui:Button Appearance="Primary" Command="{Binding GetDataNowCommand}" Icon="{ui:SymbolIcon Symbol=ArrowSync24}" Content="Poll Data"/>
+            </StackPanel>
+        </Grid>
 
-        <!-- Nodes List -->
-        <ScrollViewer Grid.Row="2">
-            <ItemsControl ItemsSource="{Binding ViewModel.Nodes}">
-                <ItemsControl.ItemsPanel>
-                    <ItemsPanelTemplate>
-                        <WrapPanel Orientation="Horizontal" />
-                    </ItemsPanelTemplate>
-                </ItemsControl.ItemsPanel>
-                <ItemsControl.ItemTemplate>
-                    <DataTemplate DataType="{x:Type models:NodeDisplayModel}">
-                        <ui:Card Margin="0,0,10,10" Width="260" VerticalAlignment="Top">
-                            <Grid>
-                                <Grid.RowDefinitions>
-                                    <RowDefinition Height="Auto"/>
-                                    <RowDefinition Height="Auto"/>
-                                    <RowDefinition Height="*"/>
-                                    <RowDefinition Height="Auto"/>
-                                </Grid.RowDefinitions>
+        <!-- 2. MAIN CONTENT -->
+        <ScrollViewer Grid.Row="1" Padding="24,0,24,0" VerticalScrollBarVisibility="Auto">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="420"/>
+                    <ColumnDefinition Width="24"/>
+                    <ColumnDefinition Width="*"/>
+                </Grid.ColumnDefinitions>
 
-                                <!-- Header: SỬ DỤNG CONVERTER Ở ĐÂY -->
-                                <DockPanel Grid.Row="0" LastChildFill="False">
-                                    <ui:SymbolIcon Symbol="{Binding Type, Converter={StaticResource TypeToIconConverter}}" 
-                                                   FontSize="20" DockPanel.Dock="Left" Margin="0,0,10,0"/>
+                <!-- LEFT: DEVICE LIST -->
+                <ui:Card Grid.Column="0" VerticalAlignment="Top" Padding="0">
+                    <Grid>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="*"/>
+                        </Grid.RowDefinitions>
 
-                                    <TextBlock Text="{Binding NodeId}" FontWeight="SemiBold" VerticalAlignment="Center" DockPanel.Dock="Left"/>
+                        <Grid Grid.Row="0" Margin="16">
+                            <TextBlock Text="Connected Nodes" FontSize="16" FontWeight="SemiBold"/>
+                            <ui:Badge Appearance="Info" Content="{Binding Nodes.Count}" HorizontalAlignment="Right"/>
+                        </Grid>
+                        <Separator Grid.Row="1"/>
 
-                                    <ui:Badge Content="{Binding Status}" 
-                                              Appearance="{Binding Status, Converter={StaticResource StatusToColorConverter}}" 
-                                              DockPanel.Dock="Right"/>
-                                </DockPanel>
+                        <!-- List of Nodes -->
+                        <ItemsControl Grid.Row="2" ItemsSource="{Binding Nodes}" Margin="0,8">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <ui:CardControl Margin="12,4,12,4">
+                                        <ui:CardControl.Icon>
+                                            <ui:SymbolIcon Symbol="{Binding Type, Converter={StaticResource TypeToIconConverter}}" FontSize="24"/>
+                                        </ui:CardControl.Icon>
 
-                                <Separator Grid.Row="1" Margin="0,10"/>
+                                        <ui:CardControl.Header>
+                                            <StackPanel>
+                                                <!-- Node Title -->
+                                                <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+                                                    <TextBlock Text="{Binding NodeId}" FontWeight="Bold" FontSize="15" VerticalAlignment="Center"/>
+                                                    <ui:Badge Content="{Binding Status}" Appearance="{Binding Status, Converter={StaticResource StatusToColorConverter}}" Margin="10,0,0,0" FontSize="11"/>
+                                                </StackPanel>
 
-                                <!-- Sensors Data -->
-                                <TextBlock Grid.Row="2" Text="{Binding SensorDataDisplay}" TextWrapping="Wrap" Margin="0,0,0,10" Foreground="Gray"/>
+                                                <!-- Sensor Chips List -->
+                                                <ItemsControl ItemsSource="{Binding Attributes}">
+                                                    <ItemsControl.ItemsPanel>
+                                                        <ItemsPanelTemplate>
+                                                            <WrapPanel Orientation="Horizontal" />
+                                                        </ItemsPanelTemplate>
+                                                    </ItemsControl.ItemsPanel>
+                                                    <ItemsControl.ItemTemplate>
+                                                        <DataTemplate>
+                                                            <Border Margin="0,0,8,6" Padding="8,4" CornerRadius="6"
+                                                                    Background="{DynamicResource ControlFillColorSecondaryBrush}"
+                                                                    BorderThickness="1" BorderBrush="{DynamicResource ControlStrokeColorDefaultBrush}">
+                                                                <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                                                    <ui:SymbolIcon Symbol="{Binding Icon}" FontSize="14" Margin="0,0,6,0" Foreground="{DynamicResource TextFillColorSecondaryBrush}"/>
+                                                                    <TextBlock Text="{Binding Value}" FontWeight="SemiBold" Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
+                                                                    <TextBlock Text="{Binding Unit}" Margin="2,0,0,0" FontSize="11" Foreground="{DynamicResource TextFillColorTertiaryBrush}" VerticalAlignment="Bottom"/>
+                                                                </StackPanel>
+                                                            </Border>
+                                                        </DataTemplate>
+                                                    </ItemsControl.ItemTemplate>
+                                                </ItemsControl>
+                                            </StackPanel>
+                                        </ui:CardControl.Header>
 
-                                <!-- Actions -->
-                                <ui:Button Grid.Row="3" Icon="Delete24" Appearance="Danger" 
-                                           HorizontalAlignment="Right"
-                                           Command="{Binding DataContext.ViewModel.DeleteNodeCommand, RelativeSource={RelativeSource AncestorType=Page}}"
-                                           CommandParameter="{Binding NodeId}"/>
-                            </Grid>
-                        </ui:Card>
-                    </DataTemplate>
-                </ItemsControl.ItemTemplate>
-            </ItemsControl>
+                                        <!-- Button Delete -->
+                                        <ui:CardControl.Content>
+                                            <!-- FIX BINDING PATH HERE -->
+                                            <!-- DataContext của Page là ViewModel, nên ta tìm đến DataContext của Page -->
+                                            <ui:Button Appearance="Transparent" 
+                                                       Command="{Binding DataContext.DeleteNodeCommand, RelativeSource={RelativeSource AncestorType=Page}}" 
+                                                       CommandParameter="{Binding NodeId}" 
+                                                       Icon="{ui:SymbolIcon Symbol=Delete16}" 
+                                                       ToolTip="Remove"/>
+                                        </ui:CardControl.Content>
+                                    </ui:CardControl>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </Grid>
+                </ui:Card>
+
+                <!-- RIGHT: CHARTS -->
+                <Grid Grid.Column="2">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="*"/>
+                        <RowDefinition Height="*"/>
+                    </Grid.RowDefinitions>
+
+                    <ui:Card Grid.Row="0" VerticalAlignment="Stretch" Padding="12" Margin="0,0,0,12">
+                        <Grid>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="*"/>
+                            </Grid.RowDefinitions>
+                            <TextBlock Text="Soil Analytics" FontSize="16" FontWeight="SemiBold" Margin="0,0,0,8"/>
+                            <Border Grid.Row="1" Background="Transparent" CornerRadius="8" BorderThickness="1" BorderBrush="{DynamicResource ControlStrokeColorDefaultBrush}">
+                                <oxy:PlotView Model="{Binding SoilPlotModel}" Background="Transparent" Margin="6" Height="250" />
+                            </Border>
+                        </Grid>
+                    </ui:Card>
+
+                    <ui:Card Grid.Row="1" VerticalAlignment="Stretch" Padding="12" Margin="0,12,0,12">
+                        <Grid>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="*"/>
+                            </Grid.RowDefinitions>
+                            <StackPanel Grid.Row="0" Margin="0,0,0,8">
+                                <TextBlock Text="Atmospheric Analytics" FontSize="16" FontWeight="SemiBold"/>
+                                <TextBlock Text="Left: Temp/Humid/Wind/Rain | Right: Press/Light" FontSize="11" Foreground="{DynamicResource TextFillColorTertiaryBrush}"/>
+                            </StackPanel>
+                            <Border Grid.Row="1" Background="Transparent" CornerRadius="8" BorderThickness="1" BorderBrush="{DynamicResource ControlStrokeColorDefaultBrush}">
+                                <oxy:PlotView Model="{Binding AtmPlotModel}" Background="Transparent" Margin="6" Height="250"/>
+                            </Border>
+                        </Grid>
+                    </ui:Card>
+                </Grid>
+            </Grid>
         </ScrollViewer>
+
+        <!-- 3. LOGS -->
+        <Grid Grid.Row="2" Margin="24,0,24,24">
+            <ui:Card Padding="0">
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="*"/>
+                    </Grid.RowDefinitions>
+                    <TextBlock Grid.Row="0" Text="System Logs" FontSize="14" FontWeight="Bold" Margin="12,8"/>
+                    <TextBox Grid.Row="1" Text="{Binding AppLogs, Mode=OneWay}" IsReadOnly="True" VerticalScrollBarVisibility="Auto" FontFamily="Consolas" FontSize="12" Padding="8" BorderThickness="0" Background="Transparent"/>
+                </Grid>
+            </ui:Card>
+        </Grid>
     </Grid>
 </Page>

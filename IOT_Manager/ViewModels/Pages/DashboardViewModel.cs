@@ -2,36 +2,94 @@
 using CommunityToolkit.Mvvm.Input;
 using IOT_Manager.Models;
 using IOT_Manager.Services;
+using OxyPlot;
+using OxyPlot.Axes;
+using OxyPlot.Legends;
+using OxyPlot.Series;
 using System.Collections.ObjectModel;
 using System.Net.Http;
 using System.Net.Http.Json;
+using System.Text;
 using System.Text.Json;
-using System.Windows.Threading;
 using System.Windows;
-using System.Threading.Tasks;
+using System.Windows.Threading;
+using Wpf.Ui.Appearance;
+using Wpf.Ui.Controls;
 
 namespace IOT_Manager.ViewModels.Pages
 {
+    // --- MODELS ---
+    public class SensorAttribute
+    {
+        public string Name { get; set; }
+        public string Value { get; set; }
+        public string Unit { get; set; }
+        public SymbolRegular Icon { get; set; }
+    }
+
+    public partial class NodeDisplayModel : ObservableObject
+    {
+        [ObservableProperty] private string _nodeId;
+        [ObservableProperty] private string _type;
+        [ObservableProperty] private string _status;
+        public ObservableCollection<SensorAttribute> Attributes { get; } = new();
+        public Dictionary<string, object> RawSensors { get; set; }
+    }
+
+    // --- VIEW MODEL ---
     public partial class DashboardViewModel : ObservableObject
     {
         private readonly ISerialService _serialService;
         private readonly SettingsService _settingsService;
         private readonly HttpClient _httpClient;
+
+        // Tùy chọn JSON để không bị lỗi chữ hoa/thường
+        private readonly JsonSerializerOptions _jsonOptions = new JsonSerializerOptions
+        {
+            PropertyNameCaseInsensitive = true
+        };
+
         private DispatcherTimer _dataTimer;
         private DispatcherTimer _scanTimer;
+        private DispatcherTimer _uploadDebounceTimer;
 
-        // Cờ kiểm tra đang scan để tránh spam lệnh khi timer tick tiếp
         private bool _isScanning = false;
 
-        // --- Properties ---
+        // Cờ quan trọng: Ngăn chặn gửi lệnh Serial khi cập nhật UI từ dữ liệu nhận được
+        private bool _isInternalUpdate = false;
+
+        private StringBuilder _logBuilder = new StringBuilder();
+
+        // Event RequestNotification: (Title, Message, Type)
+        // Type: "Info", "Success", "Danger", "Windows" (Dùng loại này cho native notification)
+        public event Action<string, string, string> RequestNotification;
+
         [ObservableProperty] private bool _isMasterConnected;
         [ObservableProperty] private string _masterStatus = "Searching...";
         [ObservableProperty] private string _firmwareVersion = "Unknown";
+
+        // Property này sẽ tự động gọi OnIsRegisterModeChanged khi thay đổi
         [ObservableProperty] private bool _isRegisterMode;
 
-        public AppConfig Config => _settingsService.Config;
+        [ObservableProperty] private string _appLogs = "System initialized...";
 
         public ObservableCollection<NodeDisplayModel> Nodes { get; } = new();
+
+        // --- CHARTS ---
+        [ObservableProperty] private PlotModel _soilPlotModel;
+        [ObservableProperty] private PlotModel _atmPlotModel;
+
+        private LineSeries _soilTempSeries;
+        private LineSeries _soilMoistSeries;
+        private LineSeries _atmTempSeries;
+        private LineSeries _atmHumidSeries;
+        private LineSeries _atmRainSeries;
+        private LineSeries _atmWindSeries;
+        private LineSeries _atmLightSeries;
+        private LineSeries _atmPressSeries;
+
+        private int _dataPointIndex = 0;
+        private const int MAX_POINTS = 100;
 
         public DashboardViewModel(ISerialService serialService, SettingsService settingsService)
         {
@@ -41,261 +99,455 @@ namespace IOT_Manager.ViewModels.Pages
 
             _serialService.DataReceived += OnSerialDataReceived;
 
+            InitializePlots();
+
+            // Timer Poll Data
             _dataTimer = new DispatcherTimer();
             _dataTimer.Tick += async (s, e) => await GetDataRoutine();
-            UpdateTimerInterval();
+            if (_settingsService.Config != null)
+                _dataTimer.Interval = TimeSpan.FromSeconds(_settingsService.Config.DataIntervalSeconds > 0 ? _settingsService.Config.DataIntervalSeconds : 5);
 
+            // Timer Scan Port
             _scanTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(2) };
             _scanTimer.Tick += AutoScanPorts;
             _scanTimer.Start();
+
+            // Timer Upload (Debounce)
+            _uploadDebounceTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(2) };
+            _uploadDebounceTimer.Tick += (s, e) =>
+            {
+                _uploadDebounceTimer.Stop();
+                if (_settingsService.Config.IsDataSendEnabled) UploadDataToServer();
+            };
+
+            AddToLog("Dashboard started. Waiting for connection...");
         }
 
-        // --- Auto Connect Logic (Updated with Timeout 5s) ---
-        private async void AutoScanPorts(object sender, EventArgs e)
+        // --- FIX LOGIC TOGGLE SWITCH (Phần bị thiếu trước đó) ---
+        // Hàm này tự động chạy khi IsRegisterMode thay đổi (do CommunityToolkit sinh ra)
+        partial void OnIsRegisterModeChanged(bool value)
         {
-            if (_serialService.IsConnected || _isScanning || _isMasterConnected) return;
+            // Nếu thay đổi do code (nhận từ serial - _isInternalUpdate = true) thì không gửi lệnh ngược lại
+            if (_isInternalUpdate) return;
 
-            _isScanning = true;
-
-            try
+            if (value)
             {
-                var ports = _serialService.GetAvailablePorts();
-
-                if (ports.Length == 0)
-                {
-                    MasterStatus = "No COM ports found";
-                    return;
-                }
-
-                bool deviceFound = false;
-
-                foreach (var port in ports)
-                {
-                    MasterStatus = $"Scanning {port} (Timeout 1s)...";
-
-                    // Chạy kết nối Background
-                    bool success = await Task.Run(async () =>
-                    {
-                        try
-                        {
-                            // 1. Connect Serial
-                            _serialService.Connect(port, 115200);
-
-                            // 2. Gửi Handshake
-                            _serialService.SendData("helloMaster");
-
-                            // 3. Timeout Logic: Đợi phản hồi tối đa 5 giây
-                            int timeoutMs = 1000;
-                            int checkInterval = 100;
-                            int elapsed = 0;
-
-                            while (elapsed < timeoutMs)
-                            {
-                                // Nếu cờ kết nối đã bật (do nhận được FW_...), return true ngay
-                                if (_isMasterConnected) return true;
-
-                                await Task.Delay(checkInterval);
-                                elapsed += checkInterval;
-                            }
-
-                            // Hết 5s vẫn chưa thấy phản hồi -> Timeout -> Ngắt kết nối
-                            _serialService.Disconnect();
-                            return false;
-                        }
-                        catch
-                        {
-                            _serialService.Disconnect();
-                            return false;
-                        }
-                    });
-
-                    if (success)
-                    {
-                        // 4. Thông báo thành công + FW Version
-                        MasterStatus = $"Connected! ({FirmwareVersion})";
-
-                        _settingsService.Config.SavedComPort = port;
-                        _settingsService.SaveConfig();
-
-                        _serialService.SendData("getListDevice");
-                        _dataTimer.Start();
-                        _scanTimer.Stop();
-                        deviceFound = true;
-                        break; // Thoát vòng lặp scan
-                    }
-                }
-
-                // Nếu quét hết danh sách mà không thấy
-                if (!deviceFound)
-                {
-                    MasterStatus = "Device not found (Handshake failed)";
-                }
+                _serialService.SendData("registerNewNode");
+                AddToLog("CMD: Entering Register Mode...");
             }
-            finally
+            else
             {
-                _isScanning = false;
+                _serialService.SendData("cancelRegister");
+                AddToLog("CMD: Cancelling Register Mode...");
+                ShowWindowsNotify("Registration", "Register Mode Cancelled");
             }
         }
 
-        // --- Serial Data Handler ---
+        // --- SERIAL LOGIC ---
+
         private void OnSerialDataReceived(string data)
         {
-            Application.Current.Dispatcher.Invoke(() =>
-            {
-                ProcessData(data.Trim());
-            });
+            Application.Current.Dispatcher.Invoke(() => ProcessData(data.Trim()));
         }
 
-        private void ProcessData(string json)
+        private void ProcessData(string data)
         {
-            // 1. Handshake response
-            if (json.StartsWith("FW_"))
+            if (string.IsNullOrWhiteSpace(data)) return;
+
+            if (!data.StartsWith("{") && !data.StartsWith("["))
             {
-                FirmwareVersion = json;
-                _settingsService.Config.FirmwareVersion = json;
-                // Bật cờ kết nối -> Vòng lặp AutoScanPorts sẽ nhận biết và thoát
-                _isMasterConnected = true;
+                AddToLog($"RX: {data}");
+                if (data.StartsWith("FW_"))
+                {
+                    FirmwareVersion = data;
+                    _isMasterConnected = true;
+                }
                 return;
             }
 
-            // 2. JSON Processing
             try
             {
-                using var doc = JsonDocument.Parse(json);
+                using var doc = JsonDocument.Parse(data);
                 var root = doc.RootElement;
 
-                // Case: List Devices
+                // Case 1: List of devices
                 if (root.ValueKind == JsonValueKind.Array)
                 {
-                    var list = JsonSerializer.Deserialize<List<NodeInfo>>(json);
+                    var list = JsonSerializer.Deserialize<List<NodeInfo>>(data, _jsonOptions);
                     UpdateNodeList(list);
                 }
-                // Case: Single Object
+                // Case 2: Data object
                 else if (root.ValueKind == JsonValueKind.Object)
                 {
-                    if (root.TryGetProperty("status", out var statusProp))
-                    {
-                        var status = statusProp.GetString();
-                        if (status == "register_mode_active") IsRegisterMode = true;
-                        if (status == "system_ready") IsRegisterMode = false;
-                        if (status == "offline" && root.TryGetProperty("id", out var idProp))
-                        {
-                            UpdateNodeStatus(idProp.GetString(), "offline");
-                        }
-                    }
+                    // Lấy Status
+                    if (root.TryGetProperty("status", out var s) || root.TryGetProperty("Status", out s))
+                        HandleStatus(s.GetString(), root);
 
-                    if (root.TryGetProperty("event", out var eventProp))
-                    {
-                        var evt = eventProp.GetString();
-                        if (evt == "register_cancelled") IsRegisterMode = false;
-                        if (evt == "registered") _serialService.SendData("getListDevice");
-                        if (evt == "deleted") _serialService.SendData("getListDevice");
-                        if (evt == "data_collection_finished")
-                        {
-                            if (_settingsService.Config.IsDataSendEnabled) UploadDataToServer();
-                        }
-                    }
+                    // Lấy Event
+                    if (root.TryGetProperty("event", out var e) || root.TryGetProperty("Event", out e))
+                        HandleEvent(e.GetString(), root);
 
-                    if (root.TryGetProperty("sensors", out var sensors) && root.TryGetProperty("id", out var nodeId))
+                    // Lấy Sensor Data
+                    JsonElement sensors;
+                    JsonElement nodeId;
+                    bool hasSensors = root.TryGetProperty("sensors", out sensors) || root.TryGetProperty("Sensors", out sensors);
+                    bool hasId = root.TryGetProperty("id", out nodeId) || root.TryGetProperty("Id", out nodeId);
+
+                    if (hasSensors && hasId)
                     {
-                        UpdateNodeData(nodeId.GetString(), sensors);
+                        string id = nodeId.GetString();
+                        UpdateNodeData(id, sensors);
+                        AddToLog($"Data <{id}> updated.");
+
+                        _uploadDebounceTimer.Stop();
+                        _uploadDebounceTimer.Start();
                     }
                 }
             }
-            catch { }
+            catch (Exception ex)
+            {
+                AddToLog($"JSON Error: {ex.Message}");
+            }
         }
 
-        // --- Helper Methods ---
-        private void UpdateNodeList(List<NodeInfo> list)
+        private void HandleStatus(string status, JsonElement root)
         {
-            Nodes.Clear();
-            foreach (var item in list)
+            _isInternalUpdate = true; // Bắt đầu cập nhật nội bộ, chặn OnIsRegisterModeChanged gửi lệnh
+            if (status == "register_mode_active") IsRegisterMode = true;
+            if (status == "system_ready") IsRegisterMode = false;
+            _isInternalUpdate = false; // Mở khóa
+        }
+
+        private void HandleEvent(string evt, JsonElement root)
+        {
+            if (evt == "registered")
             {
-                Nodes.Add(new NodeDisplayModel
-                {
-                    NodeId = item.Id,
-                    Type = item.Type,
-                    Status = item.Status,
-                    SensorDataDisplay = "Waiting for data..."
-                });
+                _serialService.SendData("getListDevice");
+
+                string id = "";
+                if (root.TryGetProperty("id", out var idElem)) id = idElem.GetString();
+                ShowWindowsNotify("New Device", $"Node {id} registered successfully!");
+
+                // Tự động tắt chế độ đăng ký trên UI mà không gửi lệnh cancel
+                _isInternalUpdate = true;
+                IsRegisterMode = false;
+                _isInternalUpdate = false;
+            }
+            if (evt == "register_cancelled")
+            {
+                _isInternalUpdate = true;
+                IsRegisterMode = false;
+                _isInternalUpdate = false;
+                ShowWindowsNotify("Registration", "Registration process was cancelled.");
+            }
+            if (evt == "deleted")
+            {
+                string id = "";
+                if (root.TryGetProperty("id", out var idElem)) id = idElem.GetString();
+                ShowWindowsNotify("Device Deleted", $"Node {id} has been removed.");
+            }
+            if (evt == "data_collection_finished")
+            {
+                _uploadDebounceTimer.Stop();
+                if (_settingsService.Config.IsDataSendEnabled) UploadDataToServer();
             }
         }
 
         private void UpdateNodeData(string id, JsonElement sensorElement)
         {
             var node = Nodes.FirstOrDefault(n => n.NodeId == id);
-            if (node != null)
+
+            if (node == null)
             {
-                node.Status = "online";
-                var dict = JsonSerializer.Deserialize<Dictionary<string, object>>(sensorElement.GetRawText());
+                string type = id.ToLower().Contains("atm") ? "atmospheric" : "soil";
+                node = new NodeDisplayModel { NodeId = id, Type = type, Status = "online" };
+                Nodes.Add(node);
+            }
+
+            node.Status = "online";
+
+            try
+            {
+                var dict = JsonSerializer.Deserialize<Dictionary<string, object>>(sensorElement.GetRawText(), _jsonOptions);
                 node.RawSensors = dict;
 
-                string display = "";
-                foreach (var kvp in dict) display += $"{kvp.Key}: {kvp.Value}\n";
-                node.SensorDataDisplay = display.Trim();
+                node.Attributes.Clear();
+                if (dict != null)
+                {
+                    foreach (var kvp in dict)
+                    {
+                        var attr = MapSensorToAttribute(kvp.Key, kvp.Value?.ToString());
+                        if (attr != null) node.Attributes.Add(attr);
+                    }
+                }
             }
+            catch { AddToLog($"Error parsing sensors for {id}"); }
+
+            UpdateCharts();
         }
 
-        private void UpdateNodeStatus(string id, string status)
+        private SensorAttribute MapSensorToAttribute(string key, string rawValue)
+        {
+            if (string.IsNullOrEmpty(rawValue)) return null;
+            if (double.TryParse(rawValue, out double dVal)) rawValue = Math.Round(dVal, 1).ToString();
+
+            string k = key.ToLower();
+
+            // Soil
+            if (k.Contains("soil_moisture")) return new SensorAttribute { Name = "Moisture", Value = rawValue, Unit = "%", Icon = SymbolRegular.Drop24 };
+            if (k.Contains("soil_temperature")) return new SensorAttribute { Name = "Soil Temp", Value = rawValue, Unit = "°C", Icon = SymbolRegular.Temperature24 };
+
+            // Atmosphere
+            if (k.Contains("air_temperature")) return new SensorAttribute { Name = "Air Temp", Value = rawValue, Unit = "°C", Icon = SymbolRegular.Temperature24 };
+            if (k.Contains("air_humidity")) return new SensorAttribute { Name = "Humidity", Value = rawValue, Unit = "%", Icon = SymbolRegular.Drop12 };
+            if (k.Contains("rain")) return new SensorAttribute { Name = "Rain", Value = rawValue, Unit = "mm", Icon = SymbolRegular.WeatherRain24 };
+            if (k.Contains("wind")) return new SensorAttribute { Name = "Wind", Value = rawValue, Unit = "m/s", Icon = SymbolRegular.WeatherThunderstorm24 };
+            if (k.Contains("light")) return new SensorAttribute { Name = "Light", Value = rawValue, Unit = "lux", Icon = SymbolRegular.WeatherSunny24 };
+            if (k.Contains("pressure")) return new SensorAttribute { Name = "Pressure", Value = rawValue, Unit = "hPa", Icon = SymbolRegular.Gauge24 };
+
+            // Default
+            return new SensorAttribute { Name = key, Value = rawValue, Unit = "", Icon = SymbolRegular.QuestionCircle24 };
+        }
+
+        // --- CHARTS LOGIC ---
+        private void UpdateCharts()
+        {
+            _dataPointIndex++;
+            bool soilUpdated = false;
+            bool atmUpdated = false;
+
+            // Soil Average
+            var soilNodes = Nodes.Where(n => n.Type.ToLower().Contains("soil") && n.RawSensors != null).ToList();
+            if (soilNodes.Any())
+            {
+                double avgTemp = 0, avgMoist = 0;
+                int countT = 0, countM = 0;
+                foreach (var n in soilNodes)
+                {
+                    if (TryGetVal(n.RawSensors, "soil_temperature", out double t)) { avgTemp += t; countT++; }
+                    if (TryGetVal(n.RawSensors, "soil_moisture", out double m)) { avgMoist += m; countM++; }
+                }
+                if (countT > 0) { _soilTempSeries.Points.Add(new DataPoint(_dataPointIndex, avgTemp / countT)); soilUpdated = true; }
+                if (countM > 0) { _soilMoistSeries.Points.Add(new DataPoint(_dataPointIndex, avgMoist / countM)); soilUpdated = true; }
+            }
+
+            // Atm Data
+            var atmNode = Nodes.FirstOrDefault(n => n.Type.ToLower().Contains("atm") && n.RawSensors != null);
+            if (atmNode != null)
+            {
+                if (TryGetVal(atmNode.RawSensors, "air_temperature", out double t)) _atmTempSeries.Points.Add(new DataPoint(_dataPointIndex, t));
+                if (TryGetVal(atmNode.RawSensors, "air_humidity", out double h)) _atmHumidSeries.Points.Add(new DataPoint(_dataPointIndex, h));
+                if (TryGetVal(atmNode.RawSensors, "rain_intensity", out double r)) _atmRainSeries.Points.Add(new DataPoint(_dataPointIndex, r));
+                if (TryGetVal(atmNode.RawSensors, "wind_speed", out double w)) _atmWindSeries.Points.Add(new DataPoint(_dataPointIndex, w));
+                if (TryGetVal(atmNode.RawSensors, "light_intensity", out double l)) _atmLightSeries.Points.Add(new DataPoint(_dataPointIndex, l));
+                if (TryGetVal(atmNode.RawSensors, "barometric_pressure", out double p)) _atmPressSeries.Points.Add(new DataPoint(_dataPointIndex, p));
+                atmUpdated = true;
+            }
+
+            if (soilUpdated) PruneAndRefresh(SoilPlotModel, _soilTempSeries, _soilMoistSeries);
+            if (atmUpdated) PruneAndRefresh(AtmPlotModel, _atmTempSeries, _atmHumidSeries, _atmRainSeries, _atmWindSeries, _atmLightSeries, _atmPressSeries);
+        }
+
+        private void PruneAndRefresh(PlotModel model, params LineSeries[] seriesList)
+        {
+            foreach (var series in seriesList)
+            {
+                while (series.Points.Count > MAX_POINTS) series.Points.RemoveAt(0);
+            }
+            model.InvalidatePlot(true);
+        }
+
+        private bool TryGetVal(Dictionary<string, object> dict, string key, out double val)
+        {
+            val = 0;
+            if (dict == null) return false;
+            // Case-insensitive check
+            var entry = dict.FirstOrDefault(x => x.Key.Equals(key, StringComparison.OrdinalIgnoreCase));
+            if (entry.Key != null && double.TryParse(entry.Value?.ToString(), out val)) return true;
+            return false;
+        }
+
+        // --- SCAN & CONNECT ---
+        private async void AutoScanPorts(object sender, EventArgs e)
+        {
+            if (_serialService.IsConnected || _isScanning || _isMasterConnected) return;
+            _isScanning = true;
+
+            await Task.Run(async () =>
+            {
+                try
+                {
+                    var ports = _serialService.GetAvailablePorts();
+                    foreach (var port in ports)
+                    {
+                        using var cts = new CancellationTokenSource(1000);
+                        if (await TryConnectPort(port, cts.Token)) return;
+                    }
+                }
+                catch { }
+                finally { _isScanning = false; }
+            });
+        }
+
+        private async Task<bool> TryConnectPort(string port, CancellationToken token)
+        {
+            try
+            {
+                _serialService.Connect(port, 115200);
+                _serialService.SendData("helloMaster");
+
+                int waited = 0;
+                while (waited < 1500)
+                {
+                    if (_isMasterConnected)
+                    {
+                        Application.Current.Dispatcher.Invoke(() =>
+                        {
+                            MasterStatus = $"Connected ({port})";
+                            _settingsService.Config.SavedComPort = port;
+                            _settingsService.SaveConfig();
+                            _serialService.SendData("getListDevice");
+                            _dataTimer.Start();
+                            _scanTimer.Stop();
+                            ShowWindowsNotify("System", $"Connected to Master at {port}");
+                        });
+                        return true;
+                    }
+                    await Task.Delay(100, token);
+                    waited += 100;
+                }
+            }
+            catch { }
+
+            _serialService.Disconnect();
+            return false;
+        }
+
+        // --- COMMANDS ---
+
+        [RelayCommand]
+        private void GetDataNow() => _serialService.SendData("getDataNow");
+
+        // Đã xóa ToggleRegisterModeCommand vì đã dùng OnIsRegisterModeChanged
+
+        [RelayCommand]
+        private void DeleteNode(string id)
         {
             var node = Nodes.FirstOrDefault(n => n.NodeId == id);
-            if (node != null) node.Status = status;
+            if (node != null) Nodes.Remove(node);
+
+            _serialService.SendData($"deleteNode {id}");
+            ShowWindowsNotify("System", $"Sent delete command for {id}");
+        }
+
+        // --- HELPERS ---
+
+        private void UpdateNodeList(List<NodeInfo> list)
+        {
+            Nodes.Clear();
+            if (list == null) return;
+            foreach (var item in list)
+            {
+                string type = item.Type ?? (item.Id.Contains("atm") ? "atmospheric" : "soil");
+                Nodes.Add(new NodeDisplayModel { NodeId = item.Id, Type = type, Status = item.Status });
+            }
         }
 
         private async Task GetDataRoutine()
         {
-            if (_isMasterConnected)
-            {
-                _serialService.SendData("getDataNow");
-            }
+            if (_isMasterConnected) _serialService.SendData("getDataNow");
         }
 
         private async void UploadDataToServer()
         {
+            if (!_settingsService.Config.IsDataSendEnabled) return;
+            AddToLog("API: Preparing upload...");
+
             try
             {
                 var payload = new
                 {
                     hub_id = _settingsService.Config.HubId,
-                    timestamp = DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ"),
+                    timestamp = DateTime.UtcNow,
                     data = new
                     {
-                        soil_nodes = Nodes.Where(n => n.Type == "soil" && n.RawSensors.Count > 0)
-                            .Select(n => new { node_id = n.NodeId, sensors = n.RawSensors }).ToList(),
-                        atmospheric_node = Nodes.Where(n => n.Type == "atm" && n.RawSensors.Count > 0)
-                             .Select(n => new { node_id = n.NodeId, sensors = n.RawSensors }).FirstOrDefault()
+                        soil_nodes = Nodes.Where(n => n.Type.Contains("soil")).Select(n => new { node_id = n.NodeId, sensors = n.RawSensors }),
+                        atm = Nodes.FirstOrDefault(n => n.Type.Contains("atm"))?.RawSensors
                     }
                 };
 
-                var response = await _httpClient.PostAsJsonAsync(_settingsService.Config.ApiEndpoint, payload);
+                string url = _settingsService.Config.ApiEndpoint;
+                if (string.IsNullOrEmpty(url)) { AddToLog("API Error: Endpoint is empty"); return; }
+
+                var response = await _httpClient.PostAsJsonAsync(url, payload);
                 if (response.IsSuccessStatusCode)
-                {
-                    MasterStatus = $"Data Uploaded: {DateTime.Now:HH:mm:ss}";
-                }
+                    ShowToast("Cloud", "Data Uploaded Successfully", "Success");
+                else
+                    ShowToast("Cloud", $"Upload Failed: {response.StatusCode}", "Danger");
             }
-            catch (Exception ex) { MasterStatus = $"Upload Err: {ex.Message}"; }
+            catch (Exception ex)
+            {
+                ShowToast("Cloud", "API Connection Error", "Danger");
+                AddToLog($"API Ex: {ex.Message}");
+            }
         }
 
-        public void UpdateTimerInterval()
+        private void AddToLog(string msg)
         {
-            _dataTimer.Interval = TimeSpan.FromSeconds(_settingsService.Config.DataIntervalSeconds);
+            Application.Current.Dispatcher.Invoke(() => {
+                _logBuilder.Insert(0, $"[{DateTime.Now:HH:mm:ss}] {msg}\n");
+                if (_logBuilder.Length > 20000) _logBuilder.Length = 20000;
+                AppLogs = _logBuilder.ToString();
+            });
         }
 
-        // --- Commands ---
-        [RelayCommand]
-        private void GetDataNow() => _serialService.SendData("getDataNow");
+        private void ShowToast(string t, string m, string type) => RequestNotification?.Invoke(t, m, type);
+        private void ShowWindowsNotify(string t, string m) => RequestNotification?.Invoke(t, m, "Windows");
 
-        [RelayCommand]
-        private void ToggleRegisterMode()
+        // --- INIT PLOTS (Đầy đủ code) ---
+        private void InitializePlots()
         {
-            if (IsRegisterMode) _serialService.SendData("cancelRegister");
-            else _serialService.SendData("registerNewNode");
+            var isDark = ApplicationThemeManager.GetAppTheme() == ApplicationTheme.Dark;
+            var textColor = isDark ? OxyColors.White : OxyColors.Black;
+            var gridColor = isDark ? OxyColor.Parse("#30FFFFFF") : OxyColor.Parse("#30000000");
+
+            // Soil Plot
+            SoilPlotModel = CreateBasePlot("Soil Moisture & Temp", textColor, gridColor, false);
+            _soilTempSeries = CreateSeries("Temp (°C)", OxyColors.OrangeRed, "LeftAxis");
+            _soilMoistSeries = CreateSeries("Moist (%)", OxyColors.ForestGreen, "LeftAxis");
+            SoilPlotModel.Series.Add(_soilTempSeries);
+            SoilPlotModel.Series.Add(_soilMoistSeries);
+
+            // Atm Plot
+            AtmPlotModel = CreateBasePlot("Weather Station Data", textColor, gridColor, true);
+            _atmTempSeries = CreateSeries("Temp", OxyColors.OrangeRed, "LeftAxis");
+            _atmHumidSeries = CreateSeries("Humid", OxyColors.DeepSkyBlue, "LeftAxis");
+            _atmRainSeries = CreateSeries("Rain", OxyColors.Blue, "LeftAxis");
+            _atmWindSeries = CreateSeries("Wind", OxyColors.Teal, "LeftAxis");
+            _atmLightSeries = CreateSeries("Light", OxyColors.Gold, "RightAxis");
+            _atmPressSeries = CreateSeries("Press", OxyColors.Purple, "RightAxis");
+
+            AtmPlotModel.Series.Add(_atmTempSeries);
+            AtmPlotModel.Series.Add(_atmHumidSeries);
+            AtmPlotModel.Series.Add(_atmRainSeries);
+            AtmPlotModel.Series.Add(_atmWindSeries);
+            AtmPlotModel.Series.Add(_atmLightSeries);
+            AtmPlotModel.Series.Add(_atmPressSeries);
+
+            SoilPlotModel.InvalidatePlot(true);
+            AtmPlotModel.InvalidatePlot(true);
         }
 
-        [RelayCommand]
-        private void DeleteNode(string id)
+        private PlotModel CreateBasePlot(string title, OxyColor textColor, OxyColor gridColor, bool useDualAxis)
         {
-            _serialService.SendData($"deleteNode {id}");
+            var model = new PlotModel { Title = title, TextColor = textColor, PlotAreaBorderColor = OxyColors.Transparent, TitleFontSize = 14 };
+            model.Legends.Add(new Legend { LegendPosition = LegendPosition.TopRight, LegendOrientation = LegendOrientation.Horizontal, LegendBorderThickness = 0, LegendTextColor = textColor });
+            model.Axes.Add(new LinearAxis { Position = AxisPosition.Bottom, MajorGridlineStyle = LineStyle.Solid, MajorGridlineColor = gridColor, TicklineColor = textColor, TextColor = textColor });
+            model.Axes.Add(new LinearAxis { Position = AxisPosition.Left, Key = "LeftAxis", MajorGridlineStyle = LineStyle.Solid, MajorGridlineColor = gridColor, TicklineColor = textColor, TextColor = textColor });
+            if (useDualAxis) model.Axes.Add(new LinearAxis { Position = AxisPosition.Right, Key = "RightAxis", TicklineColor = textColor, TextColor = textColor });
+            return model;
         }
+
+        private LineSeries CreateSeries(string title, OxyColor color, string axisKey) => new LineSeries { Title = title, Color = color, MarkerType = MarkerType.None, StrokeThickness = 2, YAxisKey = axisKey };
     }
 }
