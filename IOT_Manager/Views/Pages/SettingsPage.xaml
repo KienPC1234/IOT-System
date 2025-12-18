@@ -11,20 +11,19 @@
     Title="SettingsPage"
     mc:Ignorable="d"
     d:DataContext="{d:DesignInstance Type={x:Type vm:SettingsViewModel}, IsDesignTimeCreatable=False}">
-
     <Page.Resources>
         <helpers:EnumToBooleanConverter x:Key="EnumToBooleanConverter" />
     </Page.Resources>
-
     <Grid>
         <ui:SnackbarPresenter x:Name="SettingsSnackbarPresenter" VerticalAlignment="Bottom" HorizontalAlignment="Center" Panel.ZIndex="99"/>
-
         <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="24">
             <StackPanel>
-                <TextBlock Text="Personalization" FontSize="18" FontWeight="SemiBold" Margin="0,0,0,12" 
+                <TextBlock Text="Personalization" FontSize="18" FontWeight="SemiBold" Margin="0,0,0,12"
                            Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
-
-                <ui:CardControl Margin="0,0,0,24" Icon="Color24">
+                <ui:CardControl Margin="0,0,0,24">
+                    <ui:CardControl.Icon>
+                        <ui:SymbolIcon Symbol="Color24"/>
+                    </ui:CardControl.Icon>
                     <ui:CardControl.Header>
                         <TextBlock Text="Application Theme" />
                     </ui:CardControl.Header>
@@ -39,23 +38,37 @@
                         </StackPanel>
                     </ui:CardControl.Content>
                 </ui:CardControl>
-
-                <TextBlock Text="IoT Configuration" FontSize="18" FontWeight="SemiBold" Margin="0,0,0,12" 
+                <TextBlock Text="IoT Configuration" FontSize="18" FontWeight="SemiBold" Margin="0,0,0,12"
                            Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
-
-                <ui:CardControl Margin="0,0,0,12" Icon="Fingerprint24">
+                <ui:CardControl Margin="0,0,0,12">
+                    <ui:CardControl.Icon>
+                        <ui:SymbolIcon Symbol="Fingerprint24"/>
+                    </ui:CardControl.Icon>
                     <ui:CardControl.Header>
                         <StackPanel>
                             <TextBlock Text="Hub ID (UUID v4)"/>
-                            <TextBlock Text="{Binding Config.HubId}" FontSize="12" Foreground="{DynamicResource TextFillColorSecondaryBrush}"/>
+                            <StackPanel Orientation="Horizontal">
+                                <TextBlock Text="{Binding Config.HubId}" FontSize="12" Foreground="{DynamicResource TextFillColorSecondaryBrush}" VerticalAlignment="Center"/>
+                                <ui:Button Appearance="Secondary" Margin="8,0,0,0" Command="{Binding CopyHubIdCommand}" ToolTip="Copy Hub ID">
+                                    <ui:Button.Icon>
+                                        <ui:SymbolIcon Symbol="Copy24"/>
+                                    </ui:Button.Icon>
+                                </ui:Button>
+                            </StackPanel>
                         </StackPanel>
                     </ui:CardControl.Header>
                     <ui:CardControl.Content>
-                        <ui:Button Icon="ArrowSync24" Content="Random New ID" Command="{Binding GenerateNewHubIdCommand}" />
+                        <ui:Button Content="Random New ID" Command="{Binding GenerateNewHubIdCommand}">
+                            <ui:Button.Icon>
+                                <ui:SymbolIcon Symbol="ArrowSync24"/>
+                            </ui:Button.Icon>
+                        </ui:Button>
                     </ui:CardControl.Content>
                 </ui:CardControl>
-
-                <ui:CardControl Margin="0,0,0,12" Icon="CloudArrowUp24">
+                <ui:CardControl Margin="0,0,0,12">
+                    <ui:CardControl.Icon>
+                        <ui:SymbolIcon Symbol="CloudArrowUp24"/>
+                    </ui:CardControl.Icon>
                     <ui:CardControl.Header>
                         <TextBlock Text="API Endpoint" />
                     </ui:CardControl.Header>
@@ -63,18 +76,22 @@
                         <ui:TextBox Text="{Binding Config.ApiEndpoint, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" Width="300"/>
                     </ui:CardControl.Content>
                 </ui:CardControl>
-
-                <ui:CardControl Margin="0,0,0,12" Icon="Timer24">
+                <ui:CardControl Margin="0,0,0,12">
+                    <ui:CardControl.Icon>
+                        <ui:SymbolIcon Symbol="Timer24"/>
+                    </ui:CardControl.Icon>
                     <ui:CardControl.Header>
                         <TextBlock Text="Data Polling Interval (s)" />
                     </ui:CardControl.Header>
                     <ui:CardControl.Content>
-                        <ui:NumberBox Value="{Binding Config.DataIntervalSeconds, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" 
+                        <ui:NumberBox Value="{Binding Config.DataIntervalSeconds, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
                                       Minimum="5" Maximum="3600" SpinButtonPlacementMode="Inline" Width="120" />
                     </ui:CardControl.Content>
                 </ui:CardControl>
-
-                <ui:CardControl Margin="0,0,0,24" Icon="Send24">
+                <ui:CardControl Margin="0,0,0,24">
+                    <ui:CardControl.Icon>
+                        <ui:SymbolIcon Symbol="Send24"/>
+                    </ui:CardControl.Icon>
                     <ui:CardControl.Header>
                         <TextBlock Text="Auto Send Data" />
                     </ui:CardControl.Header>
@@ -82,9 +99,11 @@
                         <ui:ToggleSwitch IsChecked="{Binding Config.IsDataSendEnabled, Mode=TwoWay}" />
                     </ui:CardControl.Content>
                 </ui:CardControl>
-
-                <ui:Button Content="Save Settings" Appearance="Primary" Icon="Save24" 
-                           Command="{Binding SaveSettingsCommand}" HorizontalAlignment="Right" Margin="0,0,0,24"/>
+                <ui:Button Content="Save Settings" Appearance="Primary" Command="{Binding SaveSettingsCommand}" HorizontalAlignment="Right" Margin="0,0,0,24">
+                    <ui:Button.Icon>
+                        <ui:SymbolIcon Symbol="Save24"/>
+                    </ui:Button.Icon>
+                </ui:Button>
             </StackPanel>
         </ScrollViewer>
     </Grid>

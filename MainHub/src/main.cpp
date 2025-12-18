@@ -230,7 +230,7 @@ void processSerialCommand() {
             unsigned long startWait = millis();
             bool timeout = false;
             while (!radio.available()) {
-              if (millis() - startWait > 200) { timeout = true; break; }
+              if (millis() - startWait > 500) { timeout = true; break; }
             }
             
             if (!timeout) {

@@ -433,6 +433,8 @@ namespace IOT_Manager.ViewModels.Pages
 
             try
             {
+                var atmNode = Nodes.FirstOrDefault(n => n.Type.Contains("atm"));
+
                 var payload = new
                 {
                     hub_id = _settingsService.Config.HubId,
@@ -440,7 +442,7 @@ namespace IOT_Manager.ViewModels.Pages
                     data = new
                     {
                         soil_nodes = Nodes.Where(n => n.Type.Contains("soil")).Select(n => new { node_id = n.NodeId, sensors = n.RawSensors }),
-                        atm = Nodes.FirstOrDefault(n => n.Type.Contains("atm"))?.RawSensors
+                        atmospheric_node = atmNode != null ? new { node_id = atmNode.NodeId, sensors = atmNode.RawSensors } : null
                     }
                 };
 
